@@ -5,3 +5,7 @@ __pycache__/
 .venv/
 node_modules/
 *.log
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db

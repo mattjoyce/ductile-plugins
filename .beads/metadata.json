@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "beads_ductile-plugins",
+  "project_id": "2676e389-2fbf-4612-8d11-65e35a71298b"
+}
