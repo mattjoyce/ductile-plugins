@@ -46,3 +46,6 @@ See each plugin's README for available config keys.
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
+
+## Changelog
+See [CHANGELOG.md](CHANGELOG.md).
