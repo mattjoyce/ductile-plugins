@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 SUPPORTED_CONDITIONS = {"contains", "startswith", "endswith", "equals", "regex", "default"}
 

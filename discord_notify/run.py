@@ -13,7 +13,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 
 def resolve_template(template: str, payload: Dict[str, Any]) -> str:

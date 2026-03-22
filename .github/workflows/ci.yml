@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tools
+        run: pip install ruff bandit pytest
+
+      - name: Lint (ruff)
+        run: ruff check $(find . -name "*.py" ! -path "./.git/*")
+
+      - name: Security scan (bandit)
+        # Skipped: B101 (assert), B110 (except pass), B310 (urlopen), B314/B405 (xml),
+        #          B404 (subprocess import info), B603/B607 (subprocess in tests)
+        run: |
+          find . -name "run.py" ! -path "./.git/*" | \
+            xargs bandit -s B101,B110,B310,B314,B404,B405,B603,B607
+
+      - name: Run tests (sqlite_change)
+        working-directory: sqlite_change
+        run: python -m pytest test_run.py -v --tb=short
+
+      - name: Run tests (discord_notify)
+        working-directory: discord_notify
+        run: python -m pytest test_run.py -v --tb=short

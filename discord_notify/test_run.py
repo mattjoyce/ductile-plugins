@@ -6,15 +6,12 @@ import subprocess
 import sys
 import unittest
 from typing import Any, Dict
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from run import (
-    error_response,
     handle_command,
     handle_health,
-    ok_response,
     pick,
-    post_to_discord,
     resolve_template,
 )
 
@@ -170,26 +167,26 @@ class TestHandleCommand(unittest.TestCase):
 
     def test_custom_username_from_payload(self):
         with patch("run.post_to_discord") as mock_post:
-            r = self._call(payload={"message": "hi", "username": "Bot"})
+            self._call(payload={"message": "hi", "username": "Bot"})
         _, args, _ = mock_post.mock_calls[0]
         self.assertEqual(args[1]["username"], "Bot")
 
     def test_default_username_from_config(self):
         with patch("run.post_to_discord") as mock_post:
-            r = self._call(payload={"message": "hi"})
+            self._call(payload={"message": "hi"})
         _, args, _ = mock_post.mock_calls[0]
         self.assertEqual(args[1]["username"], "Ductile")
 
     def test_avatar_url_included_when_set(self):
         cfg = {**CONFIG, "default_avatar_url": "https://example.com/avatar.png"}
         with patch("run.post_to_discord") as mock_post:
-            r = handle_command(cfg, {"message": "hi"}, {})
+            handle_command(cfg, {"message": "hi"}, {})
         _, args, _ = mock_post.mock_calls[0]
         self.assertIn("avatar_url", args[1])
 
     def test_avatar_url_omitted_when_empty(self):
         with patch("run.post_to_discord") as mock_post:
-            r = self._call(payload={"message": "hi"})
+            self._call(payload={"message": "hi"})
         _, args, _ = mock_post.mock_calls[0]
         self.assertNotIn("avatar_url", args[1])
 

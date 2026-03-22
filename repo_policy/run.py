@@ -33,7 +33,7 @@ def resolve_repo_path(payload: Dict[str, Any], context: Dict[str, Any]) -> Optio
 def ensure_readme(repo_path: Path, repo_name: str, changelog_heading: str) -> List[Path]:
     changed: List[Path] = []
     readme_path = repo_path / "README.md"
-    changelog_link = f"See [CHANGELOG.md](CHANGELOG.md)."
+    changelog_link = "See [CHANGELOG.md](CHANGELOG.md)."
     section = f"## {changelog_heading}\n{changelog_link}\n"
 
     if not readme_path.exists():

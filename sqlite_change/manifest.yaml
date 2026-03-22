@@ -1,0 +1,27 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: sqlite_change
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+concurrency_safe: false
+description: "Monitors a SQLite database via a SQL query; emits a configurable event when a threshold condition is met."
+commands:
+  - name: poll
+    type: write
+    description: "Run the configured query and emit event_type if threshold is met."
+    input_schema: {}
+    output_schema:
+      status: string
+      events: array
+      state_updates: object
+  - name: health
+    type: read
+    description: "Return plugin health: db existence, current query result, state."
+    input_schema: {}
+    output_schema:
+      status: string
+      events: array
+config_keys:
+  required: [db_path, query, event_type]
+  optional: [threshold_op, threshold_value, message_template]
