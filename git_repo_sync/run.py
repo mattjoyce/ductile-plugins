@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 
@@ -35,6 +35,39 @@ def rewrite_ssh_url(url: str | None, alias_host: str) -> str | None:
     return url
 
 
+def get_ref_hash(repo_dir: Path, ref: str) -> Optional[str]:
+    """Return the commit hash for a ref, or None if it doesn't exist."""
+    result = git_command(["git", "rev-parse", ref], cwd=repo_dir)
+    h = result.stdout.strip()
+    return h if result.returncode == 0 and h else None
+
+
+def count_new_commits(repo_dir: Path, before_hash: str, after_hash: str) -> int:
+    """Count commits reachable from after_hash but not before_hash."""
+    result = git_command(
+        ["git", "rev-list", "--count", f"{before_hash}..{after_hash}"],
+        cwd=repo_dir,
+    )
+    try:
+        return int(result.stdout.strip()) if result.returncode == 0 else 0
+    except ValueError:
+        return 0
+
+
+def advance_local_branch(repo_dir: Path, default_branch: str) -> Tuple[bool, str]:
+    """Fast-forward local branch to match origin/{default_branch}.
+
+    Returns (success, error_message).
+    """
+    result = git_command(
+        ["git", "merge", "--ff-only", f"origin/{default_branch}"],
+        cwd=repo_dir,
+    )
+    if result.returncode == 0:
+        return True, ""
+    return False, result.stderr.strip()
+
+
 def main() -> None:
     request = json.load(sys.stdin)
     command = request.get("command") or "handle"
@@ -61,6 +94,7 @@ def main() -> None:
     repo_name = field("repo_name")
     clone_url = field("clone_url")
     ssh_url = field("ssh_url")
+    default_branch = field("default_branch") or "main"
     clone_dir_raw = field("clone_dir") or "~/github.mattjoyce"
     prefer_ssh = bool(config.get("prefer_ssh", False))
     ssh_alias_host = config.get("ssh_alias_host", "github.com-ductile")
@@ -87,6 +121,10 @@ def main() -> None:
     repo_dir.parent.mkdir(parents=True, exist_ok=True)
 
     action = "fetched"
+    new_commits = False
+    commit_count = 0
+    before_sha: Optional[str] = None
+    after_sha: Optional[str] = None
     logs = []
 
     def set_remote_to_ssh() -> bool:
@@ -122,6 +160,10 @@ def main() -> None:
                 }
             )
             return
+
+        remote_ref = f"origin/{default_branch}"
+        before_sha = get_ref_hash(repo_dir, remote_ref)
+
         result = git_command(["git", "-C", str(repo_dir), "fetch", "--prune", "--quiet"])
         if result.returncode != 0:
             respond(
@@ -138,6 +180,20 @@ def main() -> None:
                 }
             )
             return
+
+        after_sha = get_ref_hash(repo_dir, remote_ref)
+        new_commits = bool(before_sha and after_sha and before_sha != after_sha)
+        if new_commits:
+            commit_count = count_new_commits(repo_dir, before_sha, after_sha)
+            ok, msg = advance_local_branch(repo_dir, default_branch)
+            if not ok:
+                logs.append(
+                    {
+                        "level": "warn",
+                        "message": f"ff-merge skipped for {repo_name}: {msg}",
+                    }
+                )
+
     elif repo_dir.exists():
         respond(
             {
@@ -155,6 +211,7 @@ def main() -> None:
         return
     else:
         action = "cloned"
+        new_commits = True
         clone_source = ssh_url_effective if prefer_ssh and ssh_url_effective else (clone_url or ssh_url)
         result = git_command(["git", "clone", "--quiet", clone_source, str(repo_dir)])
         if result.returncode != 0:
@@ -172,6 +229,7 @@ def main() -> None:
                 }
             )
             return
+        after_sha = get_ref_hash(repo_dir, f"origin/{default_branch}")
 
     summary = f"Repo sync {action}: {owner}/{repo_name}"
 
@@ -190,6 +248,11 @@ def main() -> None:
                         "repo_name": repo_name,
                         "path": str(repo_dir),
                         "action": action,
+                        "new_commits": new_commits,
+                        "commit_count": commit_count,
+                        "before_sha": before_sha or "",
+                        "after_sha": after_sha or "",
+                        "default_branch": default_branch,
                         "clone_url": clone_url or "",
                         "ssh_url": (ssh_url_effective or ssh_url or ""),
                     },
