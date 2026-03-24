@@ -169,7 +169,7 @@ def main() -> None:
         }
         events.append({
             "type": "github_repo_sync.repo_discovered",
-            "dedupe_key": f"git_repo_sync:{owner}/{name}",
+            "dedupe_key": f"git_repo_sync:{owner}/{name}:{repo.get('pushed_at') or repo.get('updated_at') or ''}",
             "payload": payload,
         })
         queued += 1
