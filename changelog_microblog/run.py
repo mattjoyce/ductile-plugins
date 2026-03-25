@@ -159,6 +159,35 @@ def main() -> None:
     repo_name = pick(payload, context, "repo_name") or repo_path.name
     ssh_url = pick(payload, context, "ssh_url")
     clone_url = pick(payload, context, "clone_url")
+    default_branch = pick(payload, context, "default_branch") or "main"
+
+    # Option A: fetch + reset to origin before reading or writing anything,
+    # so local HEAD is never stale and commits never diverge.
+    fetch_result = run_git(["git", "fetch", "origin"], cwd=repo_path)
+    if fetch_result.returncode != 0:
+        respond(
+            {
+                "status": "error",
+                "error": f"git fetch failed: {fetch_result.stderr.strip()}",
+                "retry": True,
+                "logs": [{"level": "error", "message": f"git fetch failed for {repo_name}: {fetch_result.stderr.strip()}"}],
+            }
+        )
+        return
+
+    reset_result = run_git(
+        ["git", "reset", "--hard", f"origin/{default_branch}"], cwd=repo_path
+    )
+    if reset_result.returncode != 0:
+        respond(
+            {
+                "status": "error",
+                "error": f"git reset failed: {reset_result.stderr.strip()}",
+                "retry": True,
+                "logs": [{"level": "error", "message": f"git reset failed for {repo_name}: {reset_result.stderr.strip()}"}],
+            }
+        )
+        return
 
     now = dt.datetime.now(dt.timezone.utc)
     default_start = now - dt.timedelta(days=7)
