@@ -350,6 +350,14 @@ def handle_handle(config: dict, payload: dict) -> dict:
         lines.append(f"{status} `{r['session_id']}` {r['mtime']} — {note_str}")
 
     summary = "\n".join(lines)
+    if success_count == 0:
+        return {
+            "status": "error",
+            "error": f"all {len(results)} session(s) failed — check PATH/tooling in the ductile service environment",
+            "retry": False,
+            "result": summary,
+            "logs": logs,
+        }
     return ok(summary, logs)
 
 
