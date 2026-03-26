@@ -380,6 +380,20 @@ def run_learn(session_id: str, work_dir: str, learn_prompt: str, timeout: int, m
         return False, f"timed out after {timeout}s"
 
 
+def find_bun() -> str | None:
+    """Return path to bun binary, checking known install locations before PATH."""
+    known = [
+        Path.home() / ".bun" / "bin" / "bun",
+        Path("/usr/local/bin/bun"),
+        Path("/usr/bin/bun"),
+    ]
+    for candidate in known:
+        if candidate.exists() and os.access(str(candidate), os.X_OK):
+            return str(candidate)
+    import shutil
+    return shutil.which("bun")
+
+
 def handle_health(config: dict) -> dict:
     p = resolve_paths(config)
     issues = []
@@ -390,6 +404,10 @@ def handle_health(config: dict) -> dict:
         issues.append(f"ZK env not found: {p['zk_env']}")
     if not p["api_token"]:
         issues.append("api_token not configured and DUCTILE_LOCAL_TOKEN not set")
+
+    bun_path = find_bun()
+    if not bun_path:
+        issues.append("bun not found — required by SessionEnd hook (checked ~/.bun/bin/bun, /usr/local/bin/bun, /usr/bin/bun, PATH)")
 
     # Quick API ping
     try:
