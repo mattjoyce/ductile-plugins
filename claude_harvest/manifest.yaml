@@ -1,0 +1,34 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: claude_harvest
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Harvest Zettelkasten notes from Claude Code sessions using /learn"
+commands:
+  - name: poll
+    type: write
+    description: "Scan ~/.claude/projects/ for sessions changed since last run, trigger one worker pipeline per changed project."
+  - name: handle
+    type: write
+    description: "Process unprocessed sessions for a specific project and output a Discord-ready summary."
+    input_schema:
+      project: string
+      cwd: string
+  - name: health
+    type: read
+    description: "Verify dependencies: learn command, ZK vault, and ductile API reachability."
+config_keys:
+  required: []
+  optional:
+    - api_url
+    - api_token
+    - worker_pipeline
+    - state_file
+    - learn_cmd
+    - zk_env
+    - min_size_bytes
+    - max_age_days
+    - min_age_minutes
+    - max_per_project
+    - session_timeout_seconds
