@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-03-29
+- Adds agent_handshake plugin to implement a challenge-response barrier for autonomous agents.
+
 ## 2026-03-26
 - Add claude_harvest manifest and README; also add a health check to look for bun at known install locations.
 - Fix daily repo sync by including pushed_at in the dedupe key to avoid silently skipping repos.
