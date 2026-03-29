@@ -1,0 +1,23 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: agent_handshake
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Challenge-response barrier for autonomous agents. Validates SHA256 proof-of-work and logs agent identity. Use as an alias with instance-specific challenge/salt config."
+commands:
+  - name: handle
+    type: write
+    description: "Validate agent proof-of-work. Expects payload: email, challenge, proof, consent, agent."
+    input_schema:
+      email: string
+      challenge: string
+      proof: string
+      consent: boolean
+      agent: string
+  - name: health
+    type: read
+    description: "Verify plugin is configured with challenge and salt."
+config_keys:
+  required: [challenge, salt]
+  optional: [log_path, notify_plugin]
