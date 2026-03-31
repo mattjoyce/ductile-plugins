@@ -351,19 +351,23 @@ def handle_handle(config: dict, payload: dict) -> dict:
 
     summary = "\n".join(lines)
     if success_count == 0:
-        return {
+        result = {
             "status": "error",
             "error": f"all {len(results)} session(s) failed — check PATH/tooling in the ductile service environment",
             "retry": False,
             "result": summary,
             "logs": logs,
         }
+        json.dump(result, sys.stdout, separators=(",", ":"))
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        sys.exit(1)
     return ok(summary, logs)
 
 
 def run_learn(session_id: str, work_dir: str, learn_prompt: str, timeout: int, model: str) -> tuple[bool, str]:
     cmd = [
-        "claude",
+        find_claude(),
         "--resume", session_id,
         "--fork-session",
         "--no-session-persistence",
@@ -392,6 +396,20 @@ def find_bun() -> str | None:
             return str(candidate)
     import shutil
     return shutil.which("bun")
+
+
+def find_claude() -> str:
+    """Return path to claude binary, checking known install locations before PATH."""
+    known = [
+        Path.home() / ".local" / "bin" / "claude",
+        Path("/usr/local/bin/claude"),
+        Path("/usr/bin/claude"),
+    ]
+    for candidate in known:
+        if candidate.exists() and os.access(str(candidate), os.X_OK):
+            return str(candidate)
+    import shutil
+    return shutil.which("claude") or "claude"
 
 
 def handle_health(config: dict) -> dict:
