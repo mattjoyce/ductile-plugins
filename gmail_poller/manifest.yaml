@@ -1,0 +1,26 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: gmail_poller
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Poll Gmail for new messages via historyId and emit gmail.new_message signal events."
+concurrency_safe: false
+commands:
+  - name: poll
+    type: write
+    description: "Fetch new messages since last poll using Gmail history API. Emits one gmail.new_message event per new message."
+    idempotent: false
+    retry_safe: true
+  - name: health
+    type: read
+    description: "Verify gws binary is reachable and Gmail auth is valid."
+    idempotent: true
+    retry_safe: true
+config_keys:
+  required: []
+  optional:
+    - gws_binary
+    - label_filter
+    - max_per_poll
+    - emit_on_first_run
