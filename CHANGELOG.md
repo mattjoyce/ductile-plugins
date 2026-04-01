@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-04-01
+- Adds a new gmail_poller plugin to the project for polling Gmail accounts.
+
 ## 2026-03-29
 - Adds agent_handshake plugin to implement a challenge-response barrier for autonomous agents.
 
