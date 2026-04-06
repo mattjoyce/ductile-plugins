@@ -67,7 +67,7 @@ def err(message: str, *, retry: bool = False, logs: list[dict] | None = None) ->
 
 def find_docker() -> str | None:
     for candidate in DOCKER_BIN_CANDIDATES:
-        if shutil.which(candidate) or Path(candidate).is_file():
+        if shutil.which(candidate):
             return candidate
     return None
 
