@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-06
+- Adds a GPU-accelerated BirdNET bird detection plugin for birda.
+- Switches birda's find_docker to rely exclusively on shutil.which.
+- Adds 51 unit tests to cover the birda plugin.
+- Adds a README for birda with commands, payload, config, and infrastructure requirements.
+
 ## 2026-04-01
 - Adds a new gmail_poller plugin to the project for polling Gmail accounts.
 
