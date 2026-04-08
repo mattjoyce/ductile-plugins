@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-04-08
+- Add email_handler plugin; ignore .beads in git.
+- claude_harvest now uses find_claude() and exits with status 1 on total failure.
+
 ## 2026-04-06
 - Adds a GPU-accelerated BirdNET bird detection plugin for birda.
 - Switches birda's find_docker to rely exclusively on shutil.which.
