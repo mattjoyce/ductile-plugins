@@ -1,0 +1,26 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: birdnet_firstday
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+concurrency_safe: false
+description: "Polls birdnet-go SQLite detections DB and emits one event per species the first time it is detected each calendar day (local timezone). Common names resolved via birdnet-go range/species API."
+commands:
+  - name: poll
+    type: write
+    description: "Scan today's detections; emit an event per species whose first-of-day detection id exceeds the watermark."
+    input_schema: {}
+    output_schema:
+      status: string
+      events: array
+      state_updates: object
+  - name: health
+    type: read
+    description: "Report db reachability, today's detection count, watermark."
+    input_schema: {}
+    output_schema:
+      status: string
+config_keys:
+  required: [db_path]
+  optional: [species_url, event_type, cache_ttl_seconds, http_timeout_seconds]
