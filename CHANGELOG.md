@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-04-16
+- Broadcasts the first bird species detected each day to Discord.
+
 ## 2026-04-08
 - Add email_handler plugin; ignore .beads in git.
 - claude_harvest now uses find_claude() and exits with status 1 on total failure.
