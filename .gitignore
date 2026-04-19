@@ -12,3 +12,6 @@ node_modules/
 
 # Beads issue tracker
 .beads/
+
+# Beads / Dolt files (added by bd init)
+.beads-credential-key

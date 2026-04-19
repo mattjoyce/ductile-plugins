@@ -11,6 +11,9 @@ commands:
     description: "No-op scheduled tick — youtube_transcript is event-driven."
     idempotent: true
     retry_safe: true
+    values:
+      consume: []
+      emit: []
   - name: handle
     type: write
     description: "Fetch the transcript for a YouTube video by URL or video ID."

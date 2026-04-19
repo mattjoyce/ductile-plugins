@@ -11,6 +11,9 @@ commands:
     description: "Scan ~/.claude/projects/ for sessions changed since last run, trigger one worker pipeline per changed project."
     idempotent: false
     retry_safe: false
+    values:
+      consume: []
+      emit: []
   - name: handle
     type: write
     description: "Process unprocessed sessions for a specific project and output a Discord-ready summary."

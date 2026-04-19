@@ -11,6 +11,9 @@ commands:
     description: "No-op scheduled tick — no configured scheduled actions."
     idempotent: true
     retry_safe: true
+    values:
+      consume: []
+      emit: []
   - name: handle
     type: write
     description: "Process a prompt or content through an AI pattern (default: summarize). Accepts raw text, URLs, or transcripts. Use the 'pattern' field to select a pattern, 'prompt' for freeform, or 'text'/'url'/'youtube_url' for content."
