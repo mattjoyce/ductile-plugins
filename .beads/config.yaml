@@ -13,6 +13,9 @@
 # instead of the Dolt database
 # no-db: false
 
+# Dolt server management
+dolt.auto-start: false
+
 # Enable JSON output by default
 # json: false
 
