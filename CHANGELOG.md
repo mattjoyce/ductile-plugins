@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-19
+- Implemented Sprint 3 names-only value contracts and added explicit durability annotations to manifests.
+- Reconnected to the shared Dolt server and updated hooks to v1.0.2.
+- Applied Sprint 3 values contracts to the remaining manifest commands.
+- Completed Sprint 3 values contracts so all 20 plugins conform.
+- Made entrypoints executable to satisfy trust validation.
+
 ## 2026-04-16
 - Broadcasts the first bird species detected each day to Discord.
 
