@@ -26,6 +26,7 @@ commands:
       consume:
         - payload.project
         - payload.cwd
+      emit: []
   - name: health
     type: read
     description: "Verify dependencies: learn command, ZK vault, and ductile API reachability."

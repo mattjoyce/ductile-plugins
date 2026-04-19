@@ -12,6 +12,7 @@ commands:
     idempotent: false
     retry_safe: false
     values:
+      consume: []
       emit:
         - event: github_repo_sync.repo_discovered
           values:
@@ -42,6 +43,7 @@ commands:
     idempotent: false
     retry_safe: false
     values:
+      consume: []
       emit:
         - event: github_repo_sync.repo_discovered
           values:

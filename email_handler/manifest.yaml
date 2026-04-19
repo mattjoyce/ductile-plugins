@@ -17,6 +17,7 @@ commands:
         - payload.from
         - payload.subject
         - payload.snippet
+      emit: []
   - name: health
     type: read
     description: "Verify gws and claude binaries are reachable."

@@ -31,6 +31,7 @@ commands:
         - payload.lon
         - payload.min_conf
         - payload.week
+      emit: []
   - name: health
     type: read
     description: "Check docker binary is accessible and birda image exists."

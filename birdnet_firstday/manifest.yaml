@@ -13,6 +13,7 @@ commands:
     idempotent: false
     retry_safe: true
     values:
+      consume: []
       emit:
         - event: birdnet.firstday_species
           values:

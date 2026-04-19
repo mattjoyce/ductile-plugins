@@ -23,6 +23,7 @@ commands:
         - payload.title
         - payload.username
         - payload.result
+      emit: []
   - name: poll
     type: write
     description: "Schedulable alias for handle. Post a message to Discord via a scheduled trigger."
@@ -40,6 +41,7 @@ commands:
         - payload.title
         - payload.username
         - payload.result
+      emit: []
   - name: health
     type: read
     description: "Verify webhook URL is configured and reachable."
