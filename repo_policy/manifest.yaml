@@ -11,6 +11,20 @@ commands:
     description: "Enforce standardised README and CHANGELOG structure in a git repository."
     idempotent: false
     retry_safe: true
+    values:
+      consume:
+        - payload.path
+        - payload.repo_path
+        - payload.owner
+        - payload.repo_name
+        - payload.clone_dir
+      emit:
+        - event: repo_policy.completed
+          values:
+            - payload.repo_path
+            - payload.repo_name
+            - payload.changed
+            - payload.files_changed
   - name: health
     type: read
     description: "Return health status."

@@ -10,14 +10,38 @@ commands:
   - name: poll
     type: write
     description: "Fetch the configured URL and emit a content_changed event if content has changed."
+    idempotent: false
+    retry_safe: true
+    values:
+      emit:
+        - event: content_changed
+          values:
+            - payload.url
+            - payload.content
+            - payload.content_hash
+            - payload.truncated
   - name: handle
     type: write
     description: "Scrape content from a webpage and return clean markdown."
+    idempotent: true
+    retry_safe: true
     input_schema:
       url: string
+    values:
+      consume:
+        - payload.url
+      emit:
+        - event: content_ready
+          values:
+            - payload.url
+            - payload.content
+            - payload.content_hash
+            - payload.truncated
   - name: health
     type: read
     description: "Returns plugin health status."
+    idempotent: true
+    retry_safe: true
 config_keys:
   required: []
   optional: [url, max_size, jina_api_key]

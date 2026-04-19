@@ -10,18 +10,27 @@ commands:
   - name: poll
     type: write
     description: "Run the configured query and emit event_type if threshold is met."
-    input_schema: {}
-    output_schema:
-      status: string
-      events: array
-      state_updates: object
+    idempotent: false
+    retry_safe: true
+    values:
+      emit:
+        - event: "<configured event_type>"
+          values:
+            - payload.source
+            - payload.instance
+            - payload.db_path
+            - payload.query
+            - payload.result
+            - payload.previous_result
+            - payload.threshold_op
+            - payload.threshold_value
+            - payload.detected_at
+            - payload.message
   - name: health
     type: read
     description: "Return plugin health: db existence, current query result, state."
-    input_schema: {}
-    output_schema:
-      status: string
-      events: array
+    idempotent: true
+    retry_safe: true
 config_keys:
   required: [db_path, query, event_type]
   optional: [threshold_op, threshold_value, message_template]

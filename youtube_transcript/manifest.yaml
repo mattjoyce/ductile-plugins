@@ -9,15 +9,54 @@ commands:
   - name: poll
     type: write
     description: "No-op scheduled tick — youtube_transcript is event-driven."
+    idempotent: true
+    retry_safe: true
   - name: handle
     type: write
     description: "Fetch the transcript for a YouTube video by URL or video ID."
+    idempotent: true
+    retry_safe: true
     input_schema:
       url: string
       language: string
+    values:
+      consume:
+        - payload.url
+        - payload.video_url
+        - payload.video_id
+        - payload.id
+        - payload.language
+        - payload.lang
+        - payload.prompt
+        - payload.pattern
+        - payload.output_dir
+        - payload.output_path
+        - payload.filename
+        - payload.request_id
+        - payload.request_source
+      emit:
+        - event: youtube.transcript
+          values:
+            - payload.video_id
+            - payload.video_url
+            - payload.title
+            - payload.language
+            - payload.is_auto_generated
+            - payload.transcript
+            - payload.text
+            - payload.source_format
+            - payload.prompt
+            - payload.pattern
+            - payload.output_dir
+            - payload.output_path
+            - payload.filename
+            - payload.request_id
+            - payload.request_source
   - name: health
     type: read
     description: "Returns plugin health status."
+    idempotent: true
+    retry_safe: true
 config_keys:
   required: []
   optional: [default_language, request_timeout_seconds, user_agent, js_runtime_path]

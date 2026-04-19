@@ -12,6 +12,17 @@ commands:
     description: "Fetch new messages since last poll using Gmail history API. Emits one gmail.new_message event per new message."
     idempotent: false
     retry_safe: true
+    values:
+      emit:
+        - event: gmail.new_message
+          values:
+            - payload.message_id
+            - payload.thread_id
+            - payload.from
+            - payload.subject
+            - payload.snippet
+            - payload.label_ids
+            - payload.received_at
   - name: health
     type: read
     description: "Verify gws binary is reachable and Gmail auth is valid."

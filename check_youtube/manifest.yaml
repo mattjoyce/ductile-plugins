@@ -10,9 +10,20 @@ commands:
   - name: handle
     type: write
     description: "Classify a URL as YouTube, web, or plain text and route it to the correct pipeline."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume:
+        - payload.*
+      emit:
+        - event: "<configured check emit>"
+          values:
+            - payload.*
   - name: health
     type: read
     description: "Validate plugin configuration."
+    idempotent: true
+    retry_safe: true
 config_keys:
   required: [field, checks]
   optional: []

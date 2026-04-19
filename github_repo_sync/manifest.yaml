@@ -11,11 +11,61 @@ commands:
     description: "Discover public repos and clone/fetch them locally."
     idempotent: false
     retry_safe: false
+    values:
+      emit:
+        - event: github_repo_sync.repo_discovered
+          values:
+            - payload.owner
+            - payload.owner_type
+            - payload.repo_name
+            - payload.full_name
+            - payload.clone_url
+            - payload.ssh_url
+            - payload.clone_dir
+            - payload.default_branch
+            - payload.pushed_at
+        - event: github_repo_sync.completed
+          values:
+            - payload.message
+            - payload.text
+            - payload.result
+            - payload.owner
+            - payload.owner_type
+            - payload.clone_dir
+            - payload.queued
+            - payload.skipped
+            - payload.total
+            - payload.last_run
   - name: handle
     type: write
     description: "Discover and sync public repos from a configured GitHub user account."
     idempotent: false
     retry_safe: false
+    values:
+      emit:
+        - event: github_repo_sync.repo_discovered
+          values:
+            - payload.owner
+            - payload.owner_type
+            - payload.repo_name
+            - payload.full_name
+            - payload.clone_url
+            - payload.ssh_url
+            - payload.clone_dir
+            - payload.default_branch
+            - payload.pushed_at
+        - event: github_repo_sync.completed
+          values:
+            - payload.message
+            - payload.text
+            - payload.result
+            - payload.owner
+            - payload.owner_type
+            - payload.clone_dir
+            - payload.queued
+            - payload.skipped
+            - payload.total
+            - payload.last_run
   - name: health
     type: read
     description: "Return health status."

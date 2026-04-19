@@ -9,15 +9,25 @@ commands:
   - name: poll
     type: write
     description: "Scan ~/.claude/projects/ for sessions changed since last run, trigger one worker pipeline per changed project."
+    idempotent: false
+    retry_safe: false
   - name: handle
     type: write
     description: "Process unprocessed sessions for a specific project and output a Discord-ready summary."
+    idempotent: false
+    retry_safe: false
     input_schema:
       project: string
       cwd: string
+    values:
+      consume:
+        - payload.project
+        - payload.cwd
   - name: health
     type: read
     description: "Verify dependencies: learn command, ZK vault, and ductile API reachability."
+    idempotent: true
+    retry_safe: true
 config_keys:
   required: []
   optional:

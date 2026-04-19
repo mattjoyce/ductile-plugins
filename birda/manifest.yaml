@@ -24,6 +24,13 @@ commands:
       duration_s: number
       realtime_factor: number
       detection_count: integer
+    values:
+      consume:
+        - payload.wav_path
+        - payload.lat
+        - payload.lon
+        - payload.min_conf
+        - payload.week
   - name: health
     type: read
     description: "Check docker binary is accessible and birda image exists."
@@ -34,3 +41,5 @@ config_keys:
   optional:
     - docker_bin
     - default_min_conf
+    - vram_min_free_mb
+    - vram_wait_timeout_s

@@ -9,9 +9,13 @@ commands:
   - name: poll
     type: write
     description: "No-op scheduled tick — no configured scheduled actions."
+    idempotent: true
+    retry_safe: true
   - name: handle
     type: write
     description: "Process a prompt or content through an AI pattern (default: summarize). Accepts raw text, URLs, or transcripts. Use the 'pattern' field to select a pattern, 'prompt' for freeform, or 'text'/'url'/'youtube_url' for content."
+    idempotent: false
+    retry_safe: true
     input_schema:
       text: string
       url: string
@@ -19,9 +23,39 @@ commands:
       pattern: string
       prompt: string
       model: string
+    values:
+      consume:
+        - payload.text
+        - payload.content
+        - payload.url
+        - payload.youtube_url
+        - payload.pattern
+        - payload.prompt
+        - payload.model
+        - payload.output_dir
+        - payload.output_path
+        - payload.filename
+        - payload.file_path
+      emit:
+        - event: fabric.completed
+          values:
+            - payload.result
+            - payload.pattern
+            - payload.prompt
+            - payload.model
+            - payload.url
+            - payload.youtube_url
+            - payload.input_length
+            - payload.output_length
+            - payload.output_dir
+            - payload.output_path
+            - payload.filename
+            - payload.file_path
   - name: health
     type: read
     description: "Check fabric binary availability and list available patterns."
+    idempotent: true
+    retry_safe: true
 config_keys:
   required: []
   optional: [FABRIC_BIN_PATH, FABRIC_DEFAULT_MODEL]

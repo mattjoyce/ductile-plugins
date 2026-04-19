@@ -10,17 +10,28 @@ commands:
   - name: poll
     type: write
     description: "Scan today's detections; emit an event per species whose first-of-day detection id exceeds the watermark."
-    input_schema: {}
-    output_schema:
-      status: string
-      events: array
-      state_updates: object
+    idempotent: false
+    retry_safe: true
+    values:
+      emit:
+        - event: birdnet.firstday_species
+          values:
+            - payload.source
+            - payload.instance
+            - payload.scientific_name
+            - payload.common_name
+            - payload.first_id
+            - payload.first_ts
+            - payload.first_time
+            - payload.peak_conf
+            - payload.peak_conf_pct
+            - payload.detected_at
+            - payload.message
   - name: health
     type: read
     description: "Report db reachability, today's detection count, watermark."
-    input_schema: {}
-    output_schema:
-      status: string
+    idempotent: true
+    retry_safe: true
 config_keys:
   required: [db_path]
   optional: [species_url, event_type, cache_ttl_seconds, http_timeout_seconds]

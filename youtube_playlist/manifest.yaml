@@ -10,9 +10,27 @@ commands:
   - name: poll
     type: write
     description: "Fetch playlist feed and emit new video events."
+    idempotent: false
+    retry_safe: true
+    values:
+      emit:
+        - event: youtube.playlist_item
+          values:
+            - payload.video_id
+            - payload.video_url
+            - payload.url
+            - payload.title
+            - payload.published_at
+            - payload.playlist_id
+            - payload.playlist_url
+            - payload.output_path
+            - payload.prompt
+            - payload.language
   - name: health
     type: read
     description: "Validate playlist configuration."
+    idempotent: true
+    retry_safe: true
 config_keys:
   required: []
   optional:

@@ -15,9 +15,28 @@ commands:
   - name: handle
     type: write
     description: "Rebuild and restart the local Astro staging site via Docker Compose. No payload required."
+    idempotent: false
+    retry_safe: true
+    values:
+      consume:
+        - payload.*
+      emit:
+        - event: sys_exec.completed
+          values:
+            - payload.command
+            - payload.exit_code
+            - payload.duration_ms
+            - payload.stdout
+            - payload.stderr
+            - payload.stdout_truncated
+            - payload.stderr_truncated
+            - payload.working_dir
+            - payload.executed_at
   - name: health
     type: read
     description: "Validate command and runtime prerequisites."
+    idempotent: true
+    retry_safe: true
 config_keys:
   required: [command]
   optional:

@@ -9,15 +9,35 @@ commands:
   - name: handle
     type: write
     description: "Validate agent proof-of-work. Expects payload: email, challenge, proof, consent, agent."
+    idempotent: false
+    retry_safe: false
     input_schema:
       email: string
       challenge: string
       proof: string
       consent: boolean
       agent: string
+    values:
+      consume:
+        - payload.email
+        - payload.challenge
+        - payload.proof
+        - payload.consent
+        - payload.agent
+      emit:
+        - event: agent_handshake.registered
+          values:
+            - payload.email
+            - payload.agent
+            - payload.timestamp
+            - payload.challenge
+            - payload.message
+            - payload.text
   - name: health
     type: read
     description: "Verify plugin is configured with challenge and salt."
+    idempotent: true
+    retry_safe: true
 config_keys:
   required: [challenge, salt]
   optional: [log_path, notify_plugin]

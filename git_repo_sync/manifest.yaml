@@ -11,6 +11,31 @@ commands:
     description: "Clone or fetch a single repository."
     idempotent: false
     retry_safe: true
+    values:
+      consume:
+        - payload.owner
+        - payload.repo_name
+        - payload.clone_url
+        - payload.ssh_url
+        - payload.default_branch
+        - payload.clone_dir
+      emit:
+        - event: git_repo_sync.completed
+          values:
+            - payload.message
+            - payload.text
+            - payload.result
+            - payload.owner
+            - payload.repo_name
+            - payload.path
+            - payload.action
+            - payload.new_commits
+            - payload.commit_count
+            - payload.before_sha
+            - payload.after_sha
+            - payload.default_branch
+            - payload.clone_url
+            - payload.ssh_url
   - name: health
     type: read
     description: "Return health status."

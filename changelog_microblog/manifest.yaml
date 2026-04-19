@@ -11,6 +11,25 @@ commands:
     description: "Use AI to generate and append a micro-blog entry to a git repository's CHANGELOG.md from provided content."
     idempotent: false
     retry_safe: true
+    values:
+      consume:
+        - payload.repo_path
+        - payload.path
+        - payload.repo_name
+        - payload.ssh_url
+        - payload.clone_url
+        - payload.default_branch
+      emit:
+        - event: changelog_microblog.completed
+          values:
+            - payload.repo_path
+            - payload.repo_name
+            - payload.changed
+            - payload.entry_date
+            - payload.entry_text
+            - payload.since
+            - payload.ssh_url
+            - payload.clone_url
   - name: health
     type: read
     description: "Return health status."

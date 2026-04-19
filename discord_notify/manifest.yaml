@@ -9,22 +9,42 @@ commands:
   - name: handle
     type: write
     description: "Post a message to Discord. Reads 'message' or 'content' from payload."
+    idempotent: false
+    retry_safe: false
     input_schema:
       message: string
       content: string
       title: string
       username: string
+    values:
+      consume:
+        - payload.message
+        - payload.content
+        - payload.title
+        - payload.username
+        - payload.result
   - name: poll
     type: write
     description: "Schedulable alias for handle. Post a message to Discord via a scheduled trigger."
+    idempotent: false
+    retry_safe: false
     input_schema:
       message: string
       content: string
       title: string
       username: string
+    values:
+      consume:
+        - payload.message
+        - payload.content
+        - payload.title
+        - payload.username
+        - payload.result
   - name: health
     type: read
     description: "Verify webhook URL is configured and reachable."
+    idempotent: true
+    retry_safe: true
 config_keys:
   required: []
   optional: [webhook_url, default_username, default_avatar_url, poll_message]

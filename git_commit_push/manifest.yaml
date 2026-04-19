@@ -11,6 +11,20 @@ commands:
     description: "Stage, commit, and push changes to a configured git repository."
     idempotent: false
     retry_safe: true
+    values:
+      consume:
+        - payload.repo_path
+        - payload.path
+        - payload.repo_name
+        - payload.default_branch
+        - payload.ssh_url
+      emit:
+        - event: git_commit_push.completed
+          values:
+            - payload.repo_path
+            - payload.repo_name
+            - payload.changed
+            - payload.commit_sha
   - name: health
     type: read
     description: "Return health status."

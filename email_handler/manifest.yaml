@@ -11,6 +11,12 @@ commands:
     description: "Process a gmail.new_message event: fetch full body via gws, build prompt, dispatch to claude -p. Acts on result (reply, bd task, or ignore)."
     idempotent: false
     retry_safe: false
+    values:
+      consume:
+        - payload.message_id
+        - payload.from
+        - payload.subject
+        - payload.snippet
   - name: health
     type: read
     description: "Verify gws and claude binaries are reachable."
