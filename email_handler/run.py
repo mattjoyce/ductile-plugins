@@ -73,8 +73,9 @@ def fetch_body(gws: str, message_id: str, timeout: int) -> tuple[str, list[dict]
     """Fetch full message body via gws. Returns (body_text, logs)."""
     logs: list[dict] = []
     try:
+        params = json.dumps({"userId": "me", "id": message_id, "format": "full"})
         result = subprocess.run(
-            [gws, "gmail", "users", "messages", "get", "me", message_id],
+            [gws, "gmail", "users", "messages", "get", "--params", params],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -133,7 +134,7 @@ Instructions:
 
 4. After taking action, ALWAYS send a brief reply to matt.joyce@gmail.com summarising
    what you decided and what action you took (or why you ignored it).
-   Use: {gws} gmail users messages send me --json '{{"raw": "<base64-encoded reply>"}}'
+   Use: {gws} gmail users messages send --params '{{"userId":"me"}}' --json '{{"raw": "<base64-encoded reply>"}}'
    Keep the reply to 2-3 sentences. Reference the original subject."""
 
 
