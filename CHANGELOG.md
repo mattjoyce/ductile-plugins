@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-04-20
+- Fix email_handler to pass Gmail call parameters as JSON via the --params flag, standardizing configuration.
+
 ## 2026-04-19
 - Implemented Sprint 3 names-only value contracts and added explicit durability annotations to manifests.
 - Reconnected to the shared Dolt server and updated hooks to v1.0.2.
