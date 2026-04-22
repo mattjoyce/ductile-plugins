@@ -43,7 +43,7 @@ def compute_proof(challenge: str, salt: str) -> str:
     return hashlib.sha256((challenge + salt).encode()).hexdigest()
 
 
-def handle_command(config: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+def handle_command(config: Dict[str, Any], payload: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
     challenge = str(config.get("challenge") or "").strip()
     salt = str(config.get("salt") or "").strip()
     log_path = str(config.get("log_path") or "").strip()
@@ -96,6 +96,12 @@ def handle_command(config: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str,
 
     result = f"Agent registered: {email} (agent: {agent})"
 
+    try:
+        prior_total = int(state.get("total_registrations") or 0)
+    except (TypeError, ValueError):
+        prior_total = 0
+    total_registrations = prior_total + 1
+
     return ok_response(
         result=result,
         events=[{
@@ -109,7 +115,10 @@ def handle_command(config: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str,
                 "text": result,
             },
         }],
-        state_updates={"last_registration": timestamp, "total_registrations": "__increment__"},
+        state_updates={
+            "last_registration": timestamp,
+            "total_registrations": total_registrations,
+        },
     )
 
 
@@ -132,11 +141,12 @@ def main() -> None:
 
     command = request.get("command", "")
     config = request.get("config") if isinstance(request.get("config"), dict) else {}
+    state = request.get("state") if isinstance(request.get("state"), dict) else {}
     event = request.get("event", {})
     payload = event.get("payload", {}) if isinstance(event, dict) else {}
 
     if command == "handle":
-        response = handle_command(config, payload)
+        response = handle_command(config, payload, state)
     elif command == "health":
         response = handle_health(config)
     else:

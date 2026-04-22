@@ -19,13 +19,10 @@ def pick(payload, context, key, default=None):
 
 
 def poll_command(config, state):
-    """Poll command - for scheduled execution (not implemented yet)"""
+    """Poll command - fabric is event-driven; poll is a diagnostic no-op and does not own durable state."""
     return {
         "status": "ok",
         "result": "Fabric poll command - no scheduled actions configured",
-        "state_updates": {
-            "last_poll": datetime.now(timezone.utc).isoformat(),
-        },
         "logs": [
             {"level": "info", "message": "Fabric poll command - no scheduled actions configured"},
         ],
@@ -194,10 +191,6 @@ def health_command(config):
     return {
         "status": "ok",
         "result": f"Fabric healthy, {pattern_count} patterns available",
-        "state_updates": {
-            "available_patterns": pattern_count,
-            "last_health_check": datetime.now(timezone.utc).isoformat(),
-        },
         "logs": [
             {"level": "info", "message": f"Fabric healthy, {pattern_count} patterns available"},
         ],

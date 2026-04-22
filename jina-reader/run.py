@@ -139,7 +139,6 @@ elif command == "handle":
                     "truncated": truncated,
                 },
             }],
-            state_updates={"last_url": url},
             logs=logs)
 
 else:

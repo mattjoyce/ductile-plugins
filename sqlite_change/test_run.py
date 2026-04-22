@@ -265,19 +265,30 @@ class TestPollCommand(unittest.TestCase):
         self.assertIsNone(r["events"][0]["payload"]["previous_result"])
 
     def test_state_updates_always_present_on_ok(self):
+        # Sprint 7: poll emits a full snapshot containing all durable keys.
         r = poll_command(self.cfg(threshold_op=">", threshold_value=100), {}, "inst")
         self.assertIn("state_updates", r)
         su = r["state_updates"]
         self.assertIn("last_result", su)
         self.assertIn("last_checked_at", su)
+        self.assertIn("last_triggered_at", su)
 
     def test_state_updates_triggered_at_when_met(self):
         r = poll_command(self.cfg(threshold_op="changed"), {}, "inst")
-        self.assertIn("last_triggered_at", r["state_updates"])
+        self.assertIsNotNone(r["state_updates"]["last_triggered_at"])
 
-    def test_state_updates_no_triggered_at_when_not_met(self):
+    def test_state_updates_triggered_at_carried_forward_when_not_met(self):
+        prior = "2024-01-01T00:00:00+00:00"
+        r = poll_command(
+            self.cfg(threshold_op="changed"),
+            {"last_result": "5", "last_triggered_at": prior},
+            "inst",
+        )
+        self.assertEqual(r["state_updates"]["last_triggered_at"], prior)
+
+    def test_state_updates_triggered_at_null_when_never_triggered(self):
         r = poll_command(self.cfg(threshold_op="changed"), {"last_result": "5"}, "inst")
-        self.assertNotIn("last_triggered_at", r["state_updates"])
+        self.assertIsNone(r["state_updates"]["last_triggered_at"])
 
     def test_changed_first_run_triggers(self):
         r = poll_command(self.cfg(threshold_op="changed"), {}, "inst")
@@ -334,9 +345,10 @@ class TestHealthCommand(unittest.TestCase):
         r = health_command({**BASE_CONFIG, "db_path": "/nonexistent.db"}, {})
         self.assertEqual(r["result"], "degraded")
 
-    def test_state_updates_last_health_check(self):
+    def test_health_does_not_write_durable_state(self):
+        # Sprint 7: health is diagnostic-only and must not write state_updates.
         r = health_command({**BASE_CONFIG, "db_path": self.db}, {})
-        self.assertIn("last_health_check", r.get("state_updates", {}))
+        self.assertNotIn("state_updates", r)
 
     def test_invalid_config_error(self):
         r = health_command({}, {})
@@ -452,7 +464,8 @@ class TestProtocol(unittest.TestCase):
             })
             self.assertEqual(code, 0)
             self.assertEqual(r["status"], "ok")
-            self.assertIn("last_health_check", r.get("state_updates", {}))
+            # Sprint 7: health must not emit state_updates.
+            self.assertNotIn("state_updates", r)
         finally:
             os.unlink(db)
 

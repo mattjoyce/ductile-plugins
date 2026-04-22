@@ -145,13 +145,14 @@ def poll_command(config: Dict[str, Any], state: Dict[str, Any], instance: str) -
     timestamp = now_iso()
     triggered = evaluate_threshold(scalar, had_rows, threshold_op, threshold_value, last_result)
 
+    prior_triggered_at = state.get("last_triggered_at")
     state_updates: Dict[str, Any] = {
         "last_result": scalar,
         "last_checked_at": timestamp,
+        "last_triggered_at": timestamp if triggered else prior_triggered_at,
     }
 
     if triggered:
-        state_updates["last_triggered_at"] = timestamp
         payload_fields = {
             "source": "sqlite_change",
             "instance": instance,
@@ -193,7 +194,6 @@ def health_command(config: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, A
 
     db_path = config["db_path"]
     db_exists = os.path.exists(db_path)
-    timestamp = now_iso()
 
     scalar: Optional[str] = None
     query_error: Optional[str] = None
@@ -204,8 +204,6 @@ def health_command(config: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, A
         except Exception as exc:
             query_error = str(exc)
 
-    state_updates = {"last_health_check": timestamp}
-
     health_info = {
         "db_exists": db_exists,
         "current_result": scalar,
@@ -215,7 +213,6 @@ def health_command(config: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, A
 
     return ok_response(
         "ok" if db_exists and query_error is None else "degraded",
-        state_updates=state_updates,
         logs=[{"level": "info", "message": json.dumps(health_info)}],
     )
 

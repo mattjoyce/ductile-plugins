@@ -468,7 +468,6 @@ def poll_command(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "status": "ok",
         "result": "youtube_transcript poll command (no-op, event-driven)",
-        "state_updates": {"last_poll": datetime.now(timezone.utc).isoformat()},
         "logs": [
             {
                 "level": "info",
@@ -482,7 +481,6 @@ def health_command(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "status": "ok",
         "result": "youtube_transcript healthy",
-        "state_updates": {"last_health_check": datetime.now(timezone.utc).isoformat()},
         "logs": [{"level": "info", "message": "youtube_transcript healthy"}],
     }
 

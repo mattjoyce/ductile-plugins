@@ -288,7 +288,6 @@ def health_command(config: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, A
     }
     return ok_response(
         "ok" if db_exists and query_error is None else "degraded",
-        state_updates={"last_health_check": now_iso()},
         logs=[{"level": "info", "message": json.dumps(info)}],
     )
 
