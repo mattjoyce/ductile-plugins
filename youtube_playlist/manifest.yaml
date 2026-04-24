@@ -32,6 +32,12 @@ commands:
     description: "Validate playlist configuration."
     idempotent: true
     retry_safe: true
+fact_outputs:
+  - when:
+      command: poll
+    from: state_updates
+    fact_type: youtube_playlist.snapshot
+    compatibility_view: mirror_object
 config_keys:
   required: []
   optional:

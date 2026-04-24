@@ -2,6 +2,13 @@
 
 Poll a YouTube playlist feed and emit events for new videos.
 
+## Plugin Facts
+
+`poll` declares `youtube_playlist.snapshot` as a fact output from
+`state_updates`. Ductile records that snapshot append-only in `plugin_facts`
+and keeps `plugin_state` as the compatibility/current-view row via
+`mirror_object`.
+
 ## Commands
 - `poll` (write): Fetch playlist entries and emit new video events.
 - `health` (read): Validate configuration and yt-dlp availability.

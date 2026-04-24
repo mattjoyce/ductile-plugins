@@ -29,6 +29,12 @@ commands:
     description: "Verify gws binary is reachable and Gmail auth is valid."
     idempotent: true
     retry_safe: true
+fact_outputs:
+  - when:
+      command: poll
+    from: state_updates
+    fact_type: gmail_poller.snapshot
+    compatibility_view: mirror_object
 config_keys:
   required: []
   optional:

@@ -1,57 +1,66 @@
 #!/usr/bin/env python3
 """jina-reader: Scrape web pages via Jina Reader API (r.jina.ai).
 
-Protocol v1 plugin. Converts URLs to clean markdown via Jina's free
+Protocol v2 plugin. Converts URLs to clean markdown via Jina's free
 Reader API. Supports poll (configured URL) and handle (URL from event).
 
 Config keys:
-  url        - URL to scrape in poll mode (optional)
-  max_size   - Max content bytes to keep (default: 102400 = 100KB)
+  url          - URL to scrape in poll mode (optional)
+  max_size     - Max content bytes to keep (default: 102400 = 100KB)
   jina_api_key - Optional API key for higher rate limits
 """
+
+from __future__ import annotations
 
 import hashlib
 import json
 import sys
-import urllib.request
 import urllib.error
+import urllib.request
+from typing import Any
 
-# --- Read request from stdin ---
-
-request = json.loads(sys.stdin.read())
-command = request.get("command", "poll")
-config = request.get("config", {})
-state = request.get("state", {})
-event = request.get("event", {})
-
-max_size = int(config.get("max_size", 102400))
+DEFAULT_MAX_SIZE = 102_400
 
 
-def respond(status, result=None, error=None, events=None, state_updates=None, logs=None):
-    """Write protocol v2 response to stdout and exit."""
-    resp = {"status": status}
-    if error:
-        resp["error"] = error
-        resp["retry"] = True
-    if status == "ok" and result is not None:
-        resp["result"] = result
+def ok_response(
+    *,
+    result: str,
+    events: list[dict[str, Any]] | None = None,
+    state_updates: dict[str, Any] | None = None,
+    logs: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    resp: dict[str, Any] = {
+        "status": "ok",
+        "result": result,
+        "logs": logs or [],
+    }
     if events:
         resp["events"] = events
     if state_updates:
         resp["state_updates"] = state_updates
-    resp["logs"] = logs or []
-    json.dump(resp, sys.stdout)
-    sys.exit(0)
+    return resp
 
 
-def fetch_via_jina(url):
+def error_response(
+    message: str,
+    *,
+    logs: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "error": message,
+        "retry": True,
+        "logs": logs or [{"level": "error", "message": message}],
+    }
+
+
+def fetch_via_jina(url: str, *, max_size: int, api_key: str = "") -> tuple[str, bool]:
     """Fetch URL content as markdown via Jina Reader API."""
     jina_url = f"https://r.jina.ai/{url}"
     headers = {
         "Accept": "text/plain",
         "User-Agent": "ductile/jina-reader",
     }
-    api_key = config.get("jina_api_key")
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -64,73 +73,101 @@ def fetch_via_jina(url):
     return content.decode("utf-8", errors="replace"), truncated
 
 
-def content_hash(text):
+def content_hash(text: str) -> str:
     """SHA-256 hash of content for change detection."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-# --- Command handlers ---
+def handle_health() -> dict[str, Any]:
+    return ok_response(
+        result="healthy",
+        logs=[{"level": "info", "message": "healthy"}],
+    )
 
-if command == "health":
-    respond("ok", result="healthy", logs=[{"level": "info", "message": "healthy"}])
 
-elif command == "poll":
-    url = config.get("url")
+def handle_poll(config: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    max_size = int(config.get("max_size", DEFAULT_MAX_SIZE))
+    url = str(config.get("url") or "").strip()
     if not url:
-        respond("error", error="config.url required for poll command",
-                logs=[{"level": "error", "message": "no url configured for poll"}])
+        return error_response(
+            "config.url required for poll command",
+            logs=[{"level": "error", "message": "no url configured for poll"}],
+        )
 
     try:
-        markdown, truncated = fetch_via_jina(url)
+        markdown, truncated = fetch_via_jina(
+            url,
+            max_size=max_size,
+            api_key=str(config.get("jina_api_key") or ""),
+        )
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
-        respond("error", error=f"fetch failed: {exc}",
-                logs=[{"level": "error", "message": f"fetch failed for {url}: {exc}"}])
+        return error_response(
+            f"fetch failed: {exc}",
+            logs=[{"level": "error", "message": f"fetch failed for {url}: {exc}"}],
+        )
 
     new_hash = content_hash(markdown)
-    old_hash = state.get("content_hash", "")
+    old_hash = str(state.get("content_hash") or "")
     changed = new_hash != old_hash
 
-    events = []
+    events: list[dict[str, Any]] = []
     if changed:
-        events.append({
-            "type": "content_changed",
-            "payload": {
-                "url": url,
-                "content": markdown,
-                "content_hash": new_hash,
-                "truncated": truncated,
-            },
-        })
+        events.append(
+            {
+                "type": "content_changed",
+                "payload": {
+                    "url": url,
+                    "content": markdown,
+                    "content_hash": new_hash,
+                    "truncated": truncated,
+                },
+            }
+        )
 
     logs = [{"level": "info", "message": f"polled {url} (hash={new_hash}, changed={changed})"}]
     if truncated:
         logs.append({"level": "warn", "message": f"content truncated to {max_size} bytes"})
 
-    respond("ok",
-            result=f"polled {url} (changed={changed})",
-            events=events,
-            state_updates={"content_hash": new_hash, "last_url": url},
-            logs=logs)
+    return ok_response(
+        result=f"polled {url} (changed={changed})",
+        events=events,
+        state_updates={"content_hash": new_hash, "last_url": url},
+        logs=logs,
+    )
 
-elif command == "handle":
-    url = event.get("payload", {}).get("url") or event.get("url")
+
+def handle_handle(config: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+    max_size = int(config.get("max_size", DEFAULT_MAX_SIZE))
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        payload = {}
+    url = str(payload.get("url") or event.get("url") or "").strip()
     if not url:
-        respond("error", error="event must include url",
-                logs=[{"level": "error", "message": "handle: no url in event payload"}])
+        return error_response(
+            "event must include url",
+            logs=[{"level": "error", "message": "handle: no url in event payload"}],
+        )
 
     try:
-        markdown, truncated = fetch_via_jina(url)
+        markdown, truncated = fetch_via_jina(
+            url,
+            max_size=max_size,
+            api_key=str(config.get("jina_api_key") or ""),
+        )
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
-        respond("error", error=f"fetch failed: {exc}",
-                logs=[{"level": "error", "message": f"fetch failed for {url}: {exc}"}])
+        return error_response(
+            f"fetch failed: {exc}",
+            logs=[{"level": "error", "message": f"fetch failed for {url}: {exc}"}],
+        )
 
     logs = [{"level": "info", "message": f"scraped {url} ({len(markdown)} bytes)"}]
     if truncated:
         logs.append({"level": "warn", "message": f"content truncated to {max_size} bytes"})
 
-    respond("ok",
-            result=f"scraped {url} ({len(markdown)} bytes)",
-            events=[{
+    return ok_response(
+        result=f"scraped {url} ({len(markdown)} bytes)",
+        events=[
+            {
                 "type": "content_ready",
                 "payload": {
                     "url": url,
@@ -138,9 +175,41 @@ elif command == "handle":
                     "content_hash": content_hash(markdown),
                     "truncated": truncated,
                 },
-            }],
-            logs=logs)
+            }
+        ],
+        logs=logs,
+    )
 
-else:
-    respond("error", error=f"unknown command: {command}",
-            logs=[{"level": "error", "message": f"unknown command: {command}"}])
+
+def handle_request(request: dict[str, Any]) -> dict[str, Any]:
+    command = str(request.get("command") or "").strip()
+    config = request.get("config")
+    if not isinstance(config, dict):
+        config = {}
+    state = request.get("state")
+    if not isinstance(state, dict):
+        state = {}
+    event = request.get("event")
+    if not isinstance(event, dict):
+        event = {}
+
+    if command == "health":
+        return handle_health()
+    if command == "poll":
+        return handle_poll(config, state)
+    if command == "handle":
+        return handle_handle(config, event)
+    return error_response(
+        f"unknown command: {command}",
+        logs=[{"level": "error", "message": f"unknown command: {command}"}],
+    )
+
+
+def main() -> None:
+    request = json.load(sys.stdin)
+    response = handle_request(request)
+    json.dump(response, sys.stdout)
+
+
+if __name__ == "__main__":
+    main()

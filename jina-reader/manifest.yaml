@@ -43,6 +43,12 @@ commands:
     description: "Returns plugin health status."
     idempotent: true
     retry_safe: true
+fact_outputs:
+  - when:
+      command: poll
+    from: state_updates
+    fact_type: jina-reader.snapshot
+    compatibility_view: mirror_object
 config_keys:
   required: []
   optional: [url, max_size, jina_api_key]

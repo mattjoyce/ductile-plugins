@@ -2,6 +2,13 @@
 
 Scrape web pages via the Jina Reader API and return clean markdown.
 
+## Plugin Facts
+
+Only the scheduled `poll` path participates in plugin facts. `poll` declares
+`jina-reader.snapshot` as a fact output from `state_updates`, so Ductile can
+record the latest poll snapshot append-only in `plugin_facts` while keeping
+`plugin_state` as the compatibility/current-view row via `mirror_object`.
+
 ## Commands
 - `poll` (write): Fetch a configured URL and emit `content_changed` when the content hash changes.
 - `handle` (write): Scrape a URL from the event payload.

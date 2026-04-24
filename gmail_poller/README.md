@@ -10,6 +10,12 @@ Ductile plugin that polls Gmail for new messages using Gmail's History API and e
 
 **Auth delegation**: no credentials in this plugin. Auth is owned by the `gws` CLI (`~/.config/gws/credentials.enc`).
 
+## Plugin Facts
+
+`poll` declares `gmail_poller.snapshot` as a fact output from `state_updates`.
+Ductile records that snapshot append-only in `plugin_facts` and keeps
+`plugin_state` as the compatibility/current-view row via `mirror_object`.
+
 ## Event Schema
 
 ```json
