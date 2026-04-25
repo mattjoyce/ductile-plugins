@@ -1,0 +1,76 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: health_data_summary
+version: 0.2.0
+protocol: 2
+entrypoint: run.sh
+description: "Join Garmin + Withings DBs into a unified daily_health_summary row per dirty day. Delegates execution to the healthdata Docker image; this plugin is a thin wrapper that invokes `docker run --rm -i healthdata:latest`."
+concurrency_safe: false
+
+commands:
+  - name: summarize
+    type: read
+    description: "Process dirty_periods from a health.new_data event payload. Read garmin.db + withings.db (read-only), upsert one row per day into daily_health_summary in summary.db. Emits health.summary_updated."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume:
+        - payload.source
+        - payload.dirty_periods
+        - payload.detected_at
+      emit:
+        - event: health.summary_updated
+          values:
+            - payload.source
+            - payload.days_written
+            - payload.days_skipped
+            - payload.summarized_at
+
+  - name: query
+    type: read
+    description: "Return rows from daily_health_summary in a date range. Emits health.query_result."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume:
+        - payload.start_day
+        - payload.end_day
+      emit:
+        - event: health.query_result
+          values:
+            - payload.records
+            - payload.start_day
+            - payload.end_day
+
+  - name: health
+    type: read
+    description: "Probe both source DBs and the summary.db; verify the healthdata Docker image is available. Emits no state_updates."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume: []
+      emit:
+        - event: health_data_summary.health
+          values:
+            - payload.garmin_db
+            - payload.withings_db
+            - payload.summary_db
+            - payload.image
+            - payload.checked_at
+
+fact_outputs:
+  - when:
+      command: summarize
+    from: state_updates
+    fact_type: health_data_summary.snapshot
+    compatibility_view: mirror_object
+
+config_keys:
+  required:
+    - garmin_db_path
+    - withings_db_path
+    - summary_db_path
+  optional:
+    - image
+    - host_healthdata_dir
+    - container_healthdata_dir
