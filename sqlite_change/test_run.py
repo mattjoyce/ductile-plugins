@@ -16,6 +16,7 @@ from run import (
     poll_command,
     health_command,
     run_query,
+    snapshot_state,
     validate_config,
 )
 
@@ -161,6 +162,26 @@ class TestEvaluateThreshold(unittest.TestCase):
 
     def test_float_scalar_comparison(self):
         self.assertTrue(evaluate_threshold("3.14", True, ">", 3.0, None))
+
+
+# ---------------------------------------------------------------------------
+# snapshot_state
+# ---------------------------------------------------------------------------
+
+class TestSnapshotState(unittest.TestCase):
+    def test_returns_full_compatibility_snapshot(self):
+        self.assertEqual(
+            snapshot_state(
+                last_result="5",
+                last_checked_at="2026-04-24T00:00:00+00:00",
+                last_triggered_at=None,
+            ),
+            {
+                "last_result": "5",
+                "last_checked_at": "2026-04-24T00:00:00+00:00",
+                "last_triggered_at": None,
+            },
+        )
 
 
 # ---------------------------------------------------------------------------

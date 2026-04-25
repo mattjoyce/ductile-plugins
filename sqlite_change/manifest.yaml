@@ -32,6 +32,12 @@ commands:
     description: "Return plugin health: db existence, current query result, state."
     idempotent: true
     retry_safe: true
+fact_outputs:
+  - when:
+      command: poll
+    from: state_updates
+    fact_type: sqlite_change.snapshot
+    compatibility_view: mirror_object
 config_keys:
   required: [db_path, query, event_type]
   optional: [threshold_op, threshold_value, message_template]

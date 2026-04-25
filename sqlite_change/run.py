@@ -119,6 +119,20 @@ def evaluate_threshold(
     raise ValueError(f"unsupported threshold_op: {threshold_op}")
 
 
+def snapshot_state(
+    *,
+    last_result: Optional[str],
+    last_checked_at: str,
+    last_triggered_at: Optional[str],
+) -> Dict[str, Any]:
+    """Return the full compatibility snapshot for poll-owned durable state."""
+    return {
+        "last_result": last_result,
+        "last_checked_at": last_checked_at,
+        "last_triggered_at": last_triggered_at,
+    }
+
+
 def poll_command(config: Dict[str, Any], state: Dict[str, Any], instance: str) -> Dict[str, Any]:
     errors = validate_config(config)
     if errors:
@@ -146,11 +160,11 @@ def poll_command(config: Dict[str, Any], state: Dict[str, Any], instance: str) -
     triggered = evaluate_threshold(scalar, had_rows, threshold_op, threshold_value, last_result)
 
     prior_triggered_at = state.get("last_triggered_at")
-    state_updates: Dict[str, Any] = {
-        "last_result": scalar,
-        "last_checked_at": timestamp,
-        "last_triggered_at": timestamp if triggered else prior_triggered_at,
-    }
+    state_updates = snapshot_state(
+        last_result=scalar,
+        last_checked_at=timestamp,
+        last_triggered_at=timestamp if triggered else prior_triggered_at,
+    )
 
     if triggered:
         payload_fields = {
