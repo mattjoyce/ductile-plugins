@@ -1,0 +1,68 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: health_weekly_report
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Assemble a weekly health report from daily_health_summary, sectioned via fabric/Ollama, written to Obsidian and emitted for email handoff."
+concurrency_safe: false
+
+commands:
+  - name: assemble
+    type: write
+    description: "Read summary.db for an ISO week, compute deterministic numeric briefs, generate per-section + exec_summary narratives via fabric, assemble markdown + plain-text, write Obsidian archive copy, emit health_weekly_report.assembled."
+    idempotent: false
+    retry_safe: true
+    values:
+      consume:
+        - payload.week_iso
+        - payload.target_date
+        - payload.dry_run
+      emit:
+        - event: health_weekly_report.assembled
+          values:
+            - payload.week_iso
+            - payload.period_start
+            - payload.period_end
+            - payload.body_markdown
+            - payload.body_text
+            - payload.archive_path
+            - payload.sections_completed
+            - payload.sections_skipped
+            - payload.source_type
+
+  - name: health
+    type: read
+    description: "Probe fabric binary, summary_db_path readability, obsidian_archive_dir writability. Emits no state_updates."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume: []
+      emit:
+        - event: health_weekly_report.health
+          values:
+            - payload.summary_db
+            - payload.obsidian_archive
+            - payload.fabric
+            - payload.state
+            - payload.checked_at
+
+fact_outputs:
+  - when:
+      command: assemble
+    from: state_updates
+    fact_type: health_weekly_report.snapshot
+    compatibility_view: mirror_object
+
+config_keys:
+  required:
+    - summary_db_path
+    - obsidian_archive_dir
+  optional:
+    - fabric_bin
+    - model
+    - fabric_pattern_section
+    - fabric_pattern_exec_summary
+    - section_timeout_sec
+    - prior_weeks
+    - timezone
