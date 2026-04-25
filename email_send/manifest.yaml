@@ -1,0 +1,51 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: email_send
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+concurrency_safe: true
+description: "Send an email via the gws CLI (Google Workspace gmail.users.messages.send). Stateless."
+commands:
+  - name: send
+    type: write
+    description: "Send a single email. Consumes to/subject/body_text/body_html from event payload or config; emits email_send.sent."
+    idempotent: false
+    retry_safe: false
+    values:
+      consume:
+        - payload.to
+        - payload.subject
+        - payload.body_text
+        - payload.body_html
+        - payload.dry_run
+      emit:
+        - event: email_send.sent
+          values:
+            - payload.to
+            - payload.subject
+            - payload.message_id
+            - payload.thread_id
+            - payload.sent_at
+            - payload.dry_run
+  - name: health
+    type: read
+    description: "Verify gws binary is reachable and gmail auth is valid via getProfile. Emits no state_updates."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume: []
+      emit:
+        - event: email_send.health
+          values:
+            - payload.healthy
+            - payload.email_address
+            - payload.checked_at
+config_keys:
+  required: []
+  optional:
+    - gws_binary
+    - default_to
+    - default_dry_run
+    - send_timeout_seconds
+    - health_timeout_seconds
