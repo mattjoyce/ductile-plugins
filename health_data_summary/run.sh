@@ -20,7 +20,7 @@ set -euo pipefail
 
 REQUEST="$(cat)"
 
-IMAGE=$(printf '%s' "$REQUEST" | jq -r '.config.image // "healthdata:latest"')
+IMAGE=$(printf '%s' "$REQUEST" | jq -r '.config.image // "ductile-healthdata:latest"')
 HOST_DIR=$(printf '%s' "$REQUEST" | jq -r '.config.host_healthdata_dir // "/mnt/user/Projects/healthdata"')
 CONT_DIR=$(printf '%s' "$REQUEST" | jq -r '.config.container_healthdata_dir // "/app/data/healthdata"')
 
@@ -35,7 +35,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  err_response "healthdata image not found: $IMAGE — build it from github.com/mattjoyce/healthdata"
+  err_response "ductile-healthdata image not found: $IMAGE — build it from github.com/mattjoyce/ductile-healthdata"
   exit 0
 fi
 
