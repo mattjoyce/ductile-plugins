@@ -4,7 +4,8 @@
 Polls the birdnet-go SQLite detections DB. On each poll, emits one event per
 species whose earliest detection today (local calendar day) has an id greater
 than the persisted watermark. Common names are resolved via the birdnet-go
-range/species API (same host) and cached in plugin state.
+range/species API (same host) and kept in the poll snapshot used for the next
+run's enrichment behavior.
 """
 
 from __future__ import annotations
@@ -198,6 +199,26 @@ def build_event(
     return {"type": event_type, "payload": payload}
 
 
+def snapshot_state(
+    *,
+    watermark: int,
+    last_polled_at: str,
+    species_url: Optional[str],
+    species_map: Dict[str, str],
+    species_fetched_at: Optional[str],
+) -> Dict[str, Any]:
+    """Return the full compatibility snapshot for poll-owned state."""
+    state_updates: Dict[str, Any] = {
+        "watermark": watermark,
+        "last_polled_at": last_polled_at,
+    }
+    if species_url:
+        state_updates["species_cache"] = species_map
+        if species_fetched_at:
+            state_updates["species_cache_fetched_at"] = species_fetched_at
+    return state_updates
+
+
 def poll_command(config: Dict[str, Any], state: Dict[str, Any], instance: str) -> Dict[str, Any]:
     errors = validate_config(config)
     if errors:
@@ -226,14 +247,13 @@ def poll_command(config: Dict[str, Any], state: Dict[str, Any], instance: str) -
     events = [build_event(r, species_map, event_type, instance) for r in rows]
 
     new_watermark = max(watermark, today_max_id) if today_max_id is not None else watermark
-    state_updates: Dict[str, Any] = {
-        "watermark": new_watermark,
-        "last_polled_at": now_iso(),
-    }
-    if species_url:
-        state_updates["species_cache"] = species_map
-        if species_fetched_at:
-            state_updates["species_cache_fetched_at"] = species_fetched_at
+    state_updates = snapshot_state(
+        watermark=new_watermark,
+        last_polled_at=now_iso(),
+        species_url=species_url,
+        species_map=species_map,
+        species_fetched_at=species_fetched_at,
+    )
 
     logs: List[Dict[str, str]] = []
     if species_warning:

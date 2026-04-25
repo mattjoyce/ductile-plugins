@@ -19,6 +19,7 @@ from run import (
     load_species_cache,
     poll_command,
     query_first_of_day,
+    snapshot_state,
     validate_config,
 )
 
@@ -76,6 +77,44 @@ def make_db(detections: List[Tuple[int, str, int, float]]) -> str:
     conn.commit()
     conn.close()
     return path
+
+
+# ---------------------------------------------------------------------------
+# snapshot_state
+# ---------------------------------------------------------------------------
+
+class TestSnapshotState(unittest.TestCase):
+    def test_returns_minimal_snapshot_without_species_cache(self):
+        self.assertEqual(
+            snapshot_state(
+                watermark=7,
+                last_polled_at="2026-04-24T00:00:00+00:00",
+                species_url=None,
+                species_map={},
+                species_fetched_at=None,
+            ),
+            {
+                "watermark": 7,
+                "last_polled_at": "2026-04-24T00:00:00+00:00",
+            },
+        )
+
+    def test_returns_full_snapshot_with_species_cache(self):
+        self.assertEqual(
+            snapshot_state(
+                watermark=7,
+                last_polled_at="2026-04-24T00:00:00+00:00",
+                species_url="http://x/range",
+                species_map={"Tyto alba": "Barn Owl"},
+                species_fetched_at="2026-04-24T00:00:00+00:00",
+            ),
+            {
+                "watermark": 7,
+                "last_polled_at": "2026-04-24T00:00:00+00:00",
+                "species_cache": {"Tyto alba": "Barn Owl"},
+                "species_cache_fetched_at": "2026-04-24T00:00:00+00:00",
+            },
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +299,13 @@ class TestPollCommand(unittest.TestCase):
             resp = poll_command({"db_path": db}, {}, "b450")
             self.assertEqual(resp["status"], "ok")
             self.assertEqual(len(resp["events"]), 2)
-            self.assertEqual(resp["state_updates"]["watermark"], 2)
+            self.assertEqual(
+                resp["state_updates"],
+                {
+                    "watermark": 2,
+                    "last_polled_at": resp["state_updates"]["last_polled_at"],
+                },
+            )
         finally:
             os.unlink(db)
 
@@ -314,7 +359,15 @@ class TestPollCommand(unittest.TestCase):
                     "b450",
                 )
             self.assertEqual(resp["events"][0]["payload"]["common_name"], "Barn Owl")
-            self.assertEqual(resp["state_updates"]["species_cache"], {"Tyto alba": "Barn Owl"})
+            self.assertEqual(
+                resp["state_updates"],
+                {
+                    "watermark": 1,
+                    "last_polled_at": resp["state_updates"]["last_polled_at"],
+                    "species_cache": {"Tyto alba": "Barn Owl"},
+                    "species_cache_fetched_at": resp["state_updates"]["species_cache_fetched_at"],
+                },
+            )
         finally:
             os.unlink(db)
 

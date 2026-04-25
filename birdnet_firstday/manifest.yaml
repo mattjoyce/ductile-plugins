@@ -33,6 +33,12 @@ commands:
     description: "Report db reachability, today's detection count, watermark."
     idempotent: true
     retry_safe: true
+fact_outputs:
+  - when:
+      command: poll
+    from: state_updates
+    fact_type: birdnet_firstday.snapshot
+    compatibility_view: mirror_object
 config_keys:
   required: [db_path]
   optional: [species_url, event_type, cache_ttl_seconds, http_timeout_seconds]
