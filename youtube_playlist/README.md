@@ -9,6 +9,12 @@ Poll a YouTube playlist feed and emit events for new videos.
 and keeps `plugin_state` as the compatibility/current-view row via
 `mirror_object`.
 
+The persisted `seen_ids` list is order-stable: new ids are appended in
+first-observed order, and a no-change poll yields a byte-identical snapshot.
+The first post-deploy poll on each host may reorder the list once if the
+prior `plugin_state` was stored from a `set` union; subsequent polls are
+byte-stable.
+
 ## Commands
 - `poll` (write): Fetch playlist entries and emit new video events.
 - `health` (read): Validate configuration and yt-dlp availability.

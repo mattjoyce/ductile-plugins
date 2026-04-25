@@ -192,6 +192,18 @@ def fetch_playlist_via_ytdlp(
     return entries
 
 
+def merge_seen_ids(existing: List[str], additions: List[str]) -> List[str]:
+    """Return a stable seen_ids list preserving first-observed order."""
+    merged: List[str] = []
+    seen: set[str] = set()
+    for video_id in [*existing, *additions]:
+        if not video_id or video_id in seen:
+            continue
+        seen.add(video_id)
+        merged.append(video_id)
+    return merged
+
+
 def handle_poll(config: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
     playlist_id = parse_playlist_id(str(config.get("playlist_id") or ""))
     playlist_url = str(config.get("playlist_url") or "").strip()
@@ -220,7 +232,10 @@ def handle_poll(config: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]
     new_entries = [entry for entry in entries if entry["video_id"] not in seen_set]
 
     if first_run and not emit_existing:
-        updated_seen = list({entry["video_id"] for entry in entries} | seen_set)
+        updated_seen = merge_seen_ids(
+            list(seen_ids or []),
+            [entry["video_id"] for entry in entries],
+        )
         result = f"First run: recorded {len(updated_seen)} videos, emitting none"
         return ok_response(
             result=result,
@@ -294,8 +309,10 @@ def handle_poll(config: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]
             }
         )
 
-    emitted_ids = {e["payload"]["video_id"] for e in events}
-    updated_seen = list(emitted_ids | seen_set)
+    updated_seen = merge_seen_ids(
+        list(seen_ids or []),
+        [event["payload"]["video_id"] for event in events],
+    )
 
     result = f"Emitted {len(events)} new playlist items (total seen {len(updated_seen)})"
     return ok_response(

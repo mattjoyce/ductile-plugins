@@ -8,7 +8,15 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from run import handle_poll
+from run import handle_poll, merge_seen_ids
+
+
+class TestMergeSeenIDs(unittest.TestCase):
+    def test_preserves_existing_order_and_appends_new_ids(self):
+        self.assertEqual(
+            merge_seen_ids(["seen-1", "seen-2"], ["seen-2", "new-1", "new-2"]),
+            ["seen-1", "seen-2", "new-1", "new-2"],
+        )
 
 
 class TestPollStateSnapshot(unittest.TestCase):
@@ -37,7 +45,7 @@ class TestPollStateSnapshot(unittest.TestCase):
 
         self.assertEqual(resp["status"], "ok")
         self.assertEqual(resp["state_updates"]["last_checked"], "2026-04-24T00:00:00+00:00")
-        self.assertCountEqual(resp["state_updates"]["seen_ids"], ["vid-1", "vid-2"])
+        self.assertEqual(resp["state_updates"]["seen_ids"], ["vid-1", "vid-2"])
         self.assertNotIn("events", resp)
 
     @mock.patch("run.iso_now", return_value="2026-04-24T00:05:00+00:00")
@@ -62,7 +70,7 @@ class TestPollStateSnapshot(unittest.TestCase):
 
         self.assertEqual(resp["status"], "ok")
         self.assertEqual(resp["state_updates"]["last_checked"], "2026-04-24T00:05:00+00:00")
-        self.assertCountEqual(resp["state_updates"]["seen_ids"], ["seen-1", "new-1"])
+        self.assertEqual(resp["state_updates"]["seen_ids"], ["seen-1", "new-1"])
         self.assertEqual(len(resp["events"]), 1)
         self.assertEqual(resp["events"][0]["type"], "youtube.playlist_item")
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-25
+- Sprint 13B fact migration: `birdnet_firstday` declares `birdnet_firstday.snapshot` as a `mirror_object` fact output for `poll`. The snapshot keeps `species_cache` and `species_cache_fetched_at` deliberately under protocol v2 limits; tracked as a v3 follow-up.
+- Sprint 13B fact migration: `sqlite_change` declares `sqlite_change.snapshot` as a `mirror_object` fact output for `poll`. The snapshot keeps `last_checked_at` and `last_triggered_at` as part of the compatibility contract.
+- `youtube_playlist`: `seen_ids` is now order-stable. New ids append in first-observed order, so a no-change poll yields a byte-identical snapshot. The first post-deploy poll on each host may reorder the persisted list once if it was previously stored from a `set` union.
+- Each migrated plugin gains a `snapshot_state` constructor and direct unit tests beside the existing poll tests.
+
 ## 2026-04-20
 - Fix email_handler to pass Gmail call parameters as JSON via the --params flag, standardizing configuration.
 
