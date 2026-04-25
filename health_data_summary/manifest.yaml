@@ -1,0 +1,68 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: health_data_summary
+version: 0.2.0
+protocol: 2
+entrypoint: run.py
+concurrency_safe: false
+description: "Joins Garmin and Withings daily data into a unified daily_health_summary on dirty-day events from upstream collectors."
+commands:
+  - name: summarize
+    type: read
+    description: "Consume health.new_data event; join garmin+withings for each dirty day; upsert into daily_health_summary."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume:
+        - payload.source
+        - payload.dirty_periods
+      emit:
+        - event: health.summary_updated
+          values:
+            - payload.source
+            - payload.days_written
+            - payload.days_skipped
+            - payload.summarized_at
+  - name: query
+    type: read
+    description: "Return daily_health_summary records for a date range. Payload: {start: YYYY-MM-DD, end?: YYYY-MM-DD}."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume:
+        - payload.start
+        - payload.end
+      emit:
+        - event: health.query_result
+          values:
+            - payload.start
+            - payload.end
+            - payload.count
+            - payload.records
+            - payload.queried_at
+  - name: health
+    type: read
+    description: "Report plugin reachability and summary DB stats. Emits no state_updates."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume: []
+      emit:
+        - event: health_data_summary.health
+          values:
+            - payload.healthy
+            - payload.checked_at
+            - payload.db
+            - payload.state
+fact_outputs:
+  - when:
+      command: summarize
+    from: state_updates
+    fact_type: health_data_summary.snapshot
+    compatibility_view: mirror_object
+config_keys:
+  required:
+    - garmin_db_path
+    - withings_db_path
+    - summary_db_path
+  optional: []
