@@ -4,7 +4,7 @@ name: health_data_summary
 version: 0.2.0
 protocol: 2
 entrypoint: run.sh
-description: "Join Garmin + Withings DBs into a unified daily_health_summary row per dirty day. Delegates execution to the healthdata Docker image; this plugin is a thin wrapper that invokes `docker run --rm -i healthdata:latest`."
+description: "Join Garmin + Withings DBs into a unified daily_health_summary row per dirty day. Delegates execution to the ductile-healthdata Docker image; this plugin is a thin wrapper that invokes `docker run --rm -i ductile-healthdata:latest`."
 concurrency_safe: false
 
 commands:
@@ -67,9 +67,9 @@ fact_outputs:
 
 config_keys:
   required:
-    - garmin_db_path
-    - withings_db_path
-    - summary_db_path
+    - healthdata_db
+    - garmin_summary_db
+    - withings_db
   optional:
     - image
     - host_healthdata_dir
