@@ -8,9 +8,9 @@ description: "Join Garmin + Withings DBs into a unified daily_health_summary row
 concurrency_safe: false
 
 commands:
-  - name: summarize
-    type: read
-    description: "Process dirty_periods from a health.new_data event payload. Read garmin.db + withings.db (read-only), upsert one row per day into daily_health_summary in summary.db. Emits health.summary_updated."
+  - name: handle
+    type: write
+    description: "Event-dispatcher entry point. Routes by event.type: health.new_data triggers ETL of dirty_periods (Garmin or Withings) into healthdata.db. Emits healthdata.etl.completed."
     idempotent: true
     retry_safe: true
     values:
@@ -19,28 +19,12 @@ commands:
         - payload.dirty_periods
         - payload.detected_at
       emit:
-        - event: health.summary_updated
+        - event: healthdata.etl.completed
           values:
             - payload.source
-            - payload.days_written
-            - payload.days_skipped
-            - payload.summarized_at
-
-  - name: query
-    type: read
-    description: "Return rows from daily_health_summary in a date range. Emits health.query_result."
-    idempotent: true
-    retry_safe: true
-    values:
-      consume:
-        - payload.start_day
-        - payload.end_day
-      emit:
-        - event: health.query_result
-          values:
-            - payload.records
-            - payload.start_day
-            - payload.end_day
+            - payload.periods_processed
+            - payload.metrics_written
+            - payload.result
 
   - name: health
     type: read
@@ -60,7 +44,7 @@ commands:
 
 fact_outputs:
   - when:
-      command: summarize
+      command: handle
     from: state_updates
     fact_type: health_data_summary.snapshot
     compatibility_view: mirror_object
