@@ -199,11 +199,15 @@ def merge_identity_state(
     new_breaches: list[str],
     polled_at: str,
 ) -> tuple[dict, list[str]]:
-    """Return (updated_identity_dict, list_of_new_breach_names)."""
+    """Return (updated_identity_dict, list_of_new_breach_names).
+
+    breaches_seen is sorted lexicographically so the snapshot is byte-stable
+    across invocations regardless of HIBP response order.
+    """
     prior = old.get(h) or {}
-    seen: list[str] = list(prior.get("breaches_seen") or [])
-    delta = [b for b in new_breaches if b not in seen]
-    merged_seen = seen + delta
+    seen_set = set(prior.get("breaches_seen") or [])
+    delta = [b for b in new_breaches if b not in seen_set]
+    merged_seen = sorted(seen_set | set(delta))
     return {
         "label": label,
         "breaches_seen": merged_seen,
@@ -220,13 +224,14 @@ def merge_domain_state(
 ) -> tuple[dict, list[str]]:
     """For domains, HIBP returns a map of {alias: [breach_names]}.
 
-    We track unique <alias|breach> tuples as breach keys to detect deltas.
-    Returns (updated_domain_dict, list_of_new_breach_keys).
+    We track unique <alias_hash|breach> tuples as breach keys to detect deltas.
+    breaches_seen is sorted for determinism. Returns
+    (updated_domain_dict, list_of_new_breach_keys).
     """
     prior = old.get(domain) or {}
-    seen: list[str] = list(prior.get("breaches_seen") or [])
-    delta = [k for k in new_breach_keys if k not in seen]
-    merged_seen = seen + delta
+    seen_set = set(prior.get("breaches_seen") or [])
+    delta = [k for k in new_breach_keys if k not in seen_set]
+    merged_seen = sorted(seen_set | set(delta))
     return {
         "breaches_seen": merged_seen,
         "last_polled_at": polled_at,
@@ -486,7 +491,7 @@ def cmd_handle(config: dict, event: dict, state: dict) -> dict:
             state_updates={"identities": state.get("identities") or {}, "domains": prior_domains},
         )
 
-    new_seen = seen + [key]
+    new_seen = sorted(set(seen) | {key})
     prior_domains[domain] = {"breaches_seen": new_seen, "last_polled_at": now_iso()}
 
     data_classes = [str(c) for c in (breach.get("DataClasses") or [])]

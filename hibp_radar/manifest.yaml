@@ -4,24 +4,62 @@ name: hibp_radar
 version: 0.1.0
 protocol: 2
 entrypoint: run.py
-description: "Monitor configured email identities and owned domains for new appearances in HIBP breach dumps. Emits deltas only."
+description: "Monitor configured email identities and owned domains for new appearances in HIBP breach dumps. Emits delta events only."
 concurrency_safe: false
 commands:
   - name: poll
-    type: write
-    description: "Query HIBP breachedaccount for each identity and breachedomain for each verified domain. Emit hibp.new_breach events for breach names not previously seen."
-    idempotent: false
-    retry_safe: true
-  - name: handle
-    type: write
-    description: "Receive HIBP domain-subscription push webhook payload and emit hibp.new_breach events for the affected domain addresses."
+    type: read
+    description: "Query HIBP breachedaccount for each identity and breachedomain for each verified domain. Emit hibp.new_breach for breach names not previously seen and return a presence-stable snapshot."
     idempotent: true
     retry_safe: true
+    values:
+      consume: []
+      emit:
+        - event: hibp.new_breach
+          values:
+            - payload.surface
+            - payload.label
+            - payload.breach_name
+            - payload.breach_date
+            - payload.data_classes
+            - payload.recommended
+  - name: handle
+    type: write
+    description: "Receive an HIBP domain-subscription push webhook payload and emit hibp.new_breach if the breach is new for that domain."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume:
+        - payload.domain
+        - payload.breach
+      emit:
+        - event: hibp.new_breach
+          values:
+            - payload.surface
+            - payload.label
+            - payload.breach_name
+            - payload.breach_date
+            - payload.data_classes
+            - payload.recommended
   - name: health
     type: read
     description: "Report per-surface readiness: API key validity (paid endpoints), configured identities, configured domains."
     idempotent: true
     retry_safe: true
+    values:
+      consume: []
+      emit: []
+fact_outputs:
+  - when:
+      command: poll
+    from: state_updates
+    fact_type: hibp_radar.snapshot
+    compatibility_view: mirror_object
+  - when:
+      command: handle
+    from: state_updates
+    fact_type: hibp_radar.snapshot
+    compatibility_view: mirror_object
 config_keys:
   required: []
   optional:

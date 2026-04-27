@@ -30,7 +30,7 @@ def make_config(*, api_key: str = "test-key", with_domain: bool = False) -> dict
         "hibp_api_key": api_key,
         "user_agent_email": "test@example.com",
         "identities": [
-            {"label": "primary", "email": "matt.joyce@gmail.com"},
+            {"label": "primary", "email": "test@example.com"},
         ],
         "rate_limit_ms": 0,  # no real sleep in tests
         "timeout_seconds": 5,
@@ -78,7 +78,7 @@ class TestPollIdentityFirstRun(unittest.TestCase):
         names = sorted(e["payload"]["breach_name"] for e in resp["events"])
         self.assertEqual(names, ["Adobe", "LinkedIn"])
 
-        h = id_hash("matt.joyce@gmail.com")
+        h = id_hash("test@example.com")
         self.assertIn(h, resp["state_updates"]["identities"])
         seen = resp["state_updates"]["identities"][h]["breaches_seen"]
         self.assertEqual(sorted(seen), ["Adobe", "LinkedIn"])
@@ -87,13 +87,13 @@ class TestPollIdentityFirstRun(unittest.TestCase):
         identity_record = resp["state_updates"]["identities"][h]
         self.assertEqual(identity_record["label"], "primary")
         flat = repr(resp["state_updates"])
-        self.assertNotIn("matt.joyce@gmail.com", flat)
+        self.assertNotIn("test@example.com", flat)
 
 
 class TestPollIdentityDeltaOnly(unittest.TestCase):
     @mock.patch("run.hibp_get", return_value=[ADOBE_BREACH, LINKEDIN_BREACH])
     def test_subsequent_poll_with_no_new_breaches_emits_nothing(self, _mock_get):
-        h = id_hash("matt.joyce@gmail.com")
+        h = id_hash("test@example.com")
         prior_state = {
             "identities": {
                 h: {"label": "primary", "breaches_seen": ["Adobe", "LinkedIn"], "last_polled_at": "t0"}
@@ -116,7 +116,7 @@ class TestPollIdentityDeltaOnly(unittest.TestCase):
 
     @mock.patch("run.hibp_get", return_value=[ADOBE_BREACH, LINKEDIN_BREACH])
     def test_subsequent_poll_with_one_new_breach_emits_only_that_one(self, _mock_get):
-        h = id_hash("matt.joyce@gmail.com")
+        h = id_hash("test@example.com")
         prior_state = {
             "identities": {
                 h: {"label": "primary", "breaches_seen": ["Adobe"], "last_polled_at": "t0"}
@@ -135,6 +135,31 @@ class TestPollIdentityDeltaOnly(unittest.TestCase):
         self.assertEqual(resp["events"][0]["payload"]["surface"], "identity")
         self.assertEqual(resp["events"][0]["payload"]["label"], "primary")
         self.assertIn("Rotate credential", resp["events"][0]["payload"]["recommended"])
+
+
+class TestSnapshotDeterminism(unittest.TestCase):
+    @mock.patch("run.hibp_get", return_value=[LINKEDIN_BREACH, ADOBE_BREACH])
+    def test_breaches_seen_is_sorted_regardless_of_hibp_response_order(self, _mock_get):
+        """HIBP doesn't guarantee order; snapshot must be byte-stable anyway."""
+        resp = handle_request({
+            "command": "poll",
+            "config": make_config(),
+            "state": {},
+        })
+        h = id_hash("test@example.com")
+        seen = resp["state_updates"]["identities"][h]["breaches_seen"]
+        self.assertEqual(seen, sorted(seen))
+        self.assertEqual(seen, ["Adobe", "LinkedIn"])
+
+    def test_snapshot_top_level_keys_present_when_no_key(self):
+        """Presence-stable: identities + domains keys always returned."""
+        resp = handle_request({
+            "command": "poll",
+            "config": {},
+            "state": {},
+        })
+        self.assertIn("identities", resp["state_updates"])
+        self.assertIn("domains", resp["state_updates"])
 
 
 class TestPollIdentityAuthFailure(unittest.TestCase):
