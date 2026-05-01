@@ -1,0 +1,33 @@
+[project]
+name = "email_pipeline_fetch"
+version = "0.1.0"
+description = "Stage 1 ductile email pipeline plugin: poll Gmail, emit gmail.new_full_message events"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["UP010"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["."]
+
+[tool.bandit]
+skips = ["B404"]
+
+[tool.bandit.assert_used]
+skips = ["test_*.py"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "bandit>=1.8",
+]

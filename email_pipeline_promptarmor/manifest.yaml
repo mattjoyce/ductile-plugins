@@ -1,0 +1,38 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: email_pipeline_promptarmor
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Stage 3 of the ductile email pipeline. Regex scorer using prompt-armor's default_rules.yml (63 weighted rules, Apache 2.0). Reads sanitised text from durable baggage; emits email.scored.regex with verdict + per-rule hits."
+concurrency_safe: true
+commands:
+  - name: handle
+    type: write
+    description: "Score sanitised email text against prompt-armor regex rules. Reads context.mail.parts and context.mail.message_id; emits email.scored.regex with verdict, max_weight, categories, hits."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume:
+        - payload.message_id
+        - payload.parts
+      emit:
+        - event: email.scored.regex
+          values:
+            - payload.message_id
+            - payload.verdict
+            - payload.max_weight
+            - payload.categories
+            - payload.hits
+            - payload.block_reason
+  - name: health
+    type: read
+    description: "Verify rules file loads and all patterns compile. Reports rule + category counts."
+    idempotent: true
+    retry_safe: true
+config_keys:
+  required: []
+  optional:
+    - block_threshold
+    - per_rule_timeout_ms
+    - total_budget_ms

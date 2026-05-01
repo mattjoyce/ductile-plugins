@@ -1,0 +1,44 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: email_pipeline_classifier_a
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Stage 5 of the ductile email pipeline. Superagent Guard 4B classifier (Qwen3, CC BY-NC 4.0 — personal use only) hosted on llama.cpp via OpenAI-compatible HTTP. Reads sanitised text from durable baggage; emits email.scored.classifier-a with verdict + parsed JSON fields."
+concurrency_safe: true
+commands:
+  - name: handle
+    type: write
+    description: "Classify sanitised email text via remote llama.cpp endpoint. Reads context.mail.parts and context.mail.message_id; emits email.scored.classifier-a with verdict, classification, violation_types, cwe_codes, confidence, latency_ms, raw_output, model, prompt_template_version."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume:
+        - payload.message_id
+        - payload.parts
+      emit:
+        - event: email.scored.classifier-a
+          values:
+            - payload.message_id
+            - payload.verdict
+            - payload.classification
+            - payload.violation_types
+            - payload.cwe_codes
+            - payload.confidence
+            - payload.latency_ms
+            - payload.raw_output
+            - payload.model
+            - payload.prompt_template_version
+  - name: health
+    type: read
+    description: "Verify the configured llama.cpp endpoint /v1/models is reachable and the configured model is loaded."
+    idempotent: true
+    retry_safe: true
+config_keys:
+  required: []
+  optional:
+    - endpoint_url
+    - model
+    - prompt_template_version
+    - request_timeout_seconds
+    - per_message_max_chars

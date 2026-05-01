@@ -1,0 +1,31 @@
+[project]
+name = "email_pipeline_promptarmor"
+version = "0.1.0"
+description = "Stage 3 ductile email pipeline plugin: prompt-armor regex scorer"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["UP010"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["."]
+
+[tool.bandit]
+skips = ["B404"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "bandit>=1.8",
+    "pyyaml>=6.0",
+]

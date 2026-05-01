@@ -1,0 +1,39 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: email_pipeline_fetch
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Stage 1 of the ductile email pipeline. Polls Gmail via historyId and emits gmail.new_full_message events carrying the complete format=full Gmail Message JSON inline."
+concurrency_safe: false
+commands:
+  - name: poll
+    type: write
+    description: "Fetch new messages since last poll using Gmail history API; for each message, fetch the full Gmail resource and emit one gmail.new_full_message event carrying the unmodified Message JSON."
+    idempotent: false
+    retry_safe: true
+    values:
+      consume: []
+      emit:
+        - event: gmail.new_full_message
+          values:
+            - payload.message_id
+            - payload.thread_id
+            - payload.raw_message_json
+  - name: health
+    type: read
+    description: "Verify gws binary is reachable and Gmail auth is valid."
+    idempotent: true
+    retry_safe: true
+fact_outputs:
+  - when:
+      command: poll
+    from: state_updates
+    fact_type: email_pipeline_fetch.snapshot
+    compatibility_view: mirror_object
+config_keys:
+  required: []
+  optional:
+    - gws_binary
+    - label_filter
+    - max_per_poll
