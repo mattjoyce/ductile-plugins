@@ -1,0 +1,30 @@
+[project]
+name = "email_pipeline_triage"
+version = "0.1.0"
+description = "Stage 1 ductile email pipeline plugin: sender trust triage"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["UP010"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["."]
+
+[tool.bandit]
+skips = ["B404"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "bandit>=1.8",
+]

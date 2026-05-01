@@ -1,0 +1,33 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: email_pipeline_triage
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Stage 1 of the ductile email pipeline. Extracts sender identity from raw Gmail Message JSON and determines trust level via Gmail label (ductile/trusted-sender). Emits email.triaged with address and trust_level for downstream baggage."
+concurrency_safe: true
+commands:
+  - name: handle
+    type: write
+    description: "Classify sender trust level. Reads event.payload.raw_message_json; emits email.triaged with payload.address and payload.trust_level."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume:
+        - payload.message_id
+        - payload.raw_message_json
+      emit:
+        - event: email.triaged
+          values:
+            - payload.message_id
+            - payload.address
+            - payload.trust_level
+  - name: health
+    type: read
+    description: "Plugin self-check. Reports configured trusted label ID."
+    idempotent: true
+    retry_safe: true
+config_keys:
+  required: []
+  optional:
+    - trusted_label_id
