@@ -15,9 +15,9 @@ fields, JSON parse failure, or schema-version mismatch returns
 status: error with retry: false. Subprocess timeout is the one retryable
 error path.
 
-Event consumed: gmail.new_full_message
-  event.payload.message_id        — Gmail message ID
-  event.payload.raw_message_json  — full Gmail Message resource JSON
+Context consumed (from baggage, claimed by triage step):
+  context.mail.message_id        — Gmail message ID
+  context.mail.raw_message_json  — full Gmail Message resource JSON
 
 Event emitted: email.sanitised
   payload.schema_version         — sanitiser schema version
@@ -230,21 +230,21 @@ def cmd_health(config: dict[str, Any]) -> ResponseOk | ResponseErr:
 # ── handle ────────────────────────────────────────────────────────────────────
 
 
-def cmd_handle(config: dict[str, Any], event: dict[str, Any]) -> ResponseOk | ResponseErr:
+def cmd_handle(config: dict[str, Any], context: dict[str, Any]) -> ResponseOk | ResponseErr:
     binary = str(config.get("sanitise_binary") or DEFAULT_BINARY)
     expected = str(config.get("expected_schema_version") or DEFAULT_SCHEMA_VERSION)
 
-    payload = event.get("payload", {}) if isinstance(event, dict) else {}
-    if not isinstance(payload, dict):
-        payload = {}
+    mail = context.get("mail") if isinstance(context, dict) else None
+    if not isinstance(mail, dict):
+        return err("context.mail is missing or not an object")
 
-    msg_id = payload.get("message_id")
+    msg_id = mail.get("message_id")
     if not msg_id:
-        return err("event.payload.message_id is missing")
+        return err("context.mail.message_id is missing")
 
-    raw_obj = payload.get("raw_message_json")
+    raw_obj = mail.get("raw_message_json")
     if raw_obj is None:
-        return err("event.payload.raw_message_json is missing")
+        return err("context.mail.raw_message_json is missing")
 
     try:
         gmail_bytes = json.dumps(raw_obj, separators=(",", ":")).encode("utf-8")
@@ -291,11 +291,13 @@ def main() -> None:
     config = req.get("config", {})
     if not isinstance(config, dict):
         config = {}
-    event = req.get("event", {}) if isinstance(req, dict) else {}
+    context = req.get("context", {})
+    if not isinstance(context, dict):
+        context = {}
 
     out: ResponseOk | ResponseErr
     if command == CMD_HANDLE:
-        out = cmd_handle(config, event)
+        out = cmd_handle(config, context)
     elif command == CMD_HEALTH:
         out = cmd_health(config)
     else:

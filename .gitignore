@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 node_modules/
 *.log
+.DS_Store
 
 # Dolt database files (added by bd init)
 .dolt/
@@ -15,3 +16,7 @@ node_modules/
 
 # Beads / Dolt files (added by bd init)
 .beads-credential-key
+
+# email_handler — local prompt overrides (real prompt lives in ~/.config/ductile/)
+email_handler/prompt.md
+email_handler/prompt.local.md

@@ -5,8 +5,9 @@
 # ///
 """email_pipeline_veto — Ductile plugin (protocol v2).
 
-Final decision stage of the ductile email pipeline. Applies tiered 4-judge
-fusion — cheap judges first, LLM only on borderline edge cases.
+Final decision stage of the ductile email pipeline. Applies tiered 5-input
+fusion (4 scorers + sender trust) — cheap judges first, LLM only on borderline
+edge cases.
 
 Decision tiers:
 
@@ -31,6 +32,7 @@ Context consumed (from baggage):
   context.mail.message_id                  — Gmail Message-ID
   context.scorer.regex.max_weight          — float, regex max rule weight
   context.scorer.promptguard.score         — float, PG2 BERT score
+  context.scorer.sentinel.score            — float, Sentinel v2 block-probability
   context.scorer.classifier_a.verdict      — "block" | "pass"
   context.scorer.classifier_a.confidence   — float, model's confidence in its verdict
   context.sender.trust_level               — "trusted" | "unknown" (default: "unknown")
@@ -40,7 +42,7 @@ Event emitted: email.process_decision
   payload.decision      — "process" | "quarantine"
   payload.path          — "fast_pass" | "fast_block" | "llm_adjudicated" | "llm_fallback"
   payload.trust_level   — sender trust level used in decision
-  payload.scores        — {regex, promptguard, classifier_a} block-probabilities
+  payload.scores        — {regex, promptguard, sentinel, classifier_a} block-probabilities
   payload.llm_score     — float if LLM was called, else null
   dedupe_key            — process-decision:msg:<message_id>
 
@@ -86,7 +88,8 @@ You are a security analyst making final risk decisions for an email security pip
 You will receive:
   - Sender context (trusted vs unknown)
   - Regex rule score (0.0 = no match, 1.0 = strong pattern match)
-  - BERT prompt-injection classifier score (0.0 = safe, 1.0 = attack)
+  - PromptGuard 2 BERT classifier score (0.0 = safe, 1.0 = attack)
+  - Sentinel v2 classifier score (0.0 = safe, 1.0 = attack)
   - Supervised classifier block-probability (0.0 = safe, 1.0 = attack)
 
 Your job: give a final injection risk score from 0.0 to 1.0.
@@ -94,7 +97,7 @@ Your job: give a final injection risk score from 0.0 to 1.0.
 Rules:
   - Sender trust is a significant prior — a trusted sender with ambiguous content \
 scores lower than an unknown sender with identical content.
-  - Weight all three scores as evidence; override when context clearly warrants it.
+  - Weight all model scores as evidence; override when context clearly warrants it.
   - Be decisive. Do not hedge.
 
 Reply with only a decimal number between 0.0 and 1.0. Nothing else."""
@@ -111,6 +114,7 @@ class LogEntry(TypedDict):
 class ScoreSummary(TypedDict):
     regex: float
     promptguard: float
+    sentinel: float
     classifier_a: float
 
 
@@ -215,6 +219,7 @@ def read_scores(context: dict[str, Any]) -> ScoreSummary:
     return {
         "regex": _float_from(context, "scorer", "regex", "max_weight"),
         "promptguard": _float_from(context, "scorer", "promptguard", "score"),
+        "sentinel": _float_from(context, "scorer", "sentinel", "score"),
         "classifier_a": _block_prob_classifier_a(context),
     }
 
@@ -235,7 +240,8 @@ def _llm_adjudicate(
     user_msg = (
         f"Sender context: {sender_ctx}\n"
         f"Regex pattern score: {scores['regex']:.3f}\n"
-        f"BERT classifier (PG2) score: {scores['promptguard']:.3f}\n"
+        f"PromptGuard 2 BERT score: {scores['promptguard']:.3f}\n"
+        f"Sentinel v2 score: {scores['sentinel']:.3f}\n"
         f"Supervised classifier block-probability: {scores['classifier_a']:.3f}\n\n"
         "Final risk score (0.0-1.0):"
     )
@@ -374,7 +380,7 @@ def cmd_handle(config: dict[str, Any], context: dict[str, Any]) -> ResponseOk | 
         f"{payload['decision'].upper()} {msg_id}: "
         f"path={payload['path']}, trust={payload['trust_level']}, "
         f"scores=({payload['scores']['regex']:.3f},{payload['scores']['promptguard']:.3f},"
-        f"{payload['scores']['classifier_a']:.3f})"
+        f"{payload['scores']['sentinel']:.3f},{payload['scores']['classifier_a']:.3f})"
     )
     if payload.get("llm_score") is not None:
         summary += f", llm={payload['llm_score']:.3f}"
@@ -400,7 +406,7 @@ def cmd_health(config: dict[str, Any]) -> ResponseOk | ResponseErr:
     endpoint = str(config.get("llm_endpoint_url") or DEFAULT_LLM_ENDPOINT)
     model = str(config.get("llm_model") or DEFAULT_LLM_MODEL)
     msg = (
-        f"email_pipeline_veto healthy — 4-judge tiered fusion "
+        f"email_pipeline_veto healthy — 5-input tiered fusion "
         f"(fast_pass≤{FAST_PASS_THRESHOLD}, fast_block≥{FAST_BLOCK_THRESHOLD}), "
         f"llm={model}@{endpoint}"
     )

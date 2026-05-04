@@ -4,12 +4,12 @@ name: email_pipeline_sanitise
 version: 0.1.0
 protocol: 2
 entrypoint: run.py
-description: "Stage 2 of the ductile email pipeline. Thin sys_exec shim around the standalone Go sanitiser binary; consumes gmail.new_full_message events, pipes the raw Gmail Message JSON through the sanitiser, emits email.sanitised with the parsed Facts payload."
+description: "Stage 2 of the ductile email pipeline. Thin sys_exec shim around the standalone Go sanitiser binary; reads raw Gmail Message JSON from context.mail.raw_message_json (claimed by upstream triage step), pipes through the sanitiser, emits email.sanitised with the parsed Facts payload."
 concurrency_safe: true
 commands:
   - name: handle
     type: write
-    description: "Sanitise a single Gmail Message resource. Reads event.payload.raw_message_json, pipes to sanitise binary, emits email.sanitised with the parsed facts.Facts payload."
+    description: "Sanitise a single Gmail Message resource. Reads context.mail.message_id and context.mail.raw_message_json from baggage (claimed by triage step), pipes to sanitise binary, emits email.sanitised with the parsed facts.Facts payload."
     idempotent: true
     retry_safe: true
     values:

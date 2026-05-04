@@ -1,4 +1,4 @@
-"""Tests for email_pipeline_veto plugin."""
+"""Tests for email_pipeline_veto plugin (v0.3.0 — 5-input tiered fusion)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import io
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -15,231 +16,271 @@ from run import (
     DECISION_PROCESS,
     DECISION_QUARANTINE,
     DEDUPE_PREFIX,
-    DISP_CLASSIFIERS_ONLY,
-    DISP_DISAGREEMENT,
-    DISP_MISSING,
-    DISP_REGEX_ONLY,
-    DISP_SINGLE_CLASSIFIER,
-    DISP_UNANIMOUS_BLOCK,
-    DISP_UNANIMOUS_PASS,
     EVENT_TYPE,
-    VERDICT_MISSING,
+    FAST_BLOCK_THRESHOLD,
+    FAST_PASS_THRESHOLD,
+    LLM_BLOCK_THRESHOLD,
+    TRUST_TRUSTED,
+    TRUST_UNKNOWN,
     cmd_handle,
     cmd_health,
-    compute_disposition,
-    fuse,
     main,
+    read_scores,
 )
 
 
 def _ctx(
     *,
-    regex: str | None = "pass",
-    promptguard: str | None = "pass",
-    classifier_a: str | None = "pass",
+    regex: float = 0.05,
+    promptguard: float = 0.05,
+    sentinel: float = 0.05,
+    classifier_a_verdict: str = "pass",
+    classifier_a_confidence: float = 0.95,
+    trust_level: str = TRUST_UNKNOWN,
     msg_id: str = "M-1",
-) -> dict[str, object]:
-    scorer: dict[str, object] = {}
-    if regex is not None:
-        scorer["regex"] = {"verdict": regex}
-    if promptguard is not None:
-        scorer["promptguard"] = {"verdict": promptguard}
-    if classifier_a is not None:
-        scorer["classifier_a"] = {"verdict": classifier_a}
-    return {"mail": {"message_id": msg_id}, "scorer": scorer}
-
-
-# ── fuse: pure logic ──────────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    ("regex", "pg", "cls_a", "expected_decision", "expected_reasons"),
-    [
-        ("pass", "pass", "pass", DECISION_PROCESS, []),
-        ("block", "pass", "pass", DECISION_QUARANTINE, ["regex"]),
-        ("pass", "block", "pass", DECISION_QUARANTINE, ["promptguard"]),
-        ("pass", "pass", "block", DECISION_QUARANTINE, ["classifier_a"]),
-        ("block", "block", "pass", DECISION_QUARANTINE, ["regex", "promptguard"]),
-        ("block", "pass", "block", DECISION_QUARANTINE, ["regex", "classifier_a"]),
-        ("pass", "block", "block", DECISION_QUARANTINE, ["promptguard", "classifier_a"]),
-        (
-            "block",
-            "block",
-            "block",
-            DECISION_QUARANTINE,
-            ["regex", "promptguard", "classifier_a"],
-        ),
-        (
-            "missing",
-            "pass",
-            "pass",
-            DECISION_QUARANTINE,
-            ["regex"],
-        ),
-        (
-            "pass",
-            "missing",
-            "pass",
-            DECISION_QUARANTINE,
-            ["promptguard"],
-        ),
-    ],
-)
-def test_fuse_decision_table(
-    regex: str,
-    pg: str,
-    cls_a: str,
-    expected_decision: str,
-    expected_reasons: list[str],
-) -> None:
-    decision, reasons = fuse({"regex": regex, "promptguard": pg, "classifier_a": cls_a})
-    assert decision == expected_decision
-    assert reasons == expected_reasons
-
-
-# ── compute_disposition ───────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    ("regex", "pg", "cls_a", "expected_disp"),
-    [
-        ("block", "block", "block", DISP_UNANIMOUS_BLOCK),
-        ("pass", "pass", "pass", DISP_UNANIMOUS_PASS),
-        ("block", "pass", "pass", DISP_REGEX_ONLY),
-        ("pass", "block", "block", DISP_CLASSIFIERS_ONLY),
-        ("pass", "block", "pass", DISP_SINGLE_CLASSIFIER),
-        ("pass", "pass", "block", DISP_SINGLE_CLASSIFIER),
-        ("block", "block", "pass", DISP_DISAGREEMENT),
-        ("block", "pass", "block", DISP_DISAGREEMENT),
-        ("missing", "pass", "pass", DISP_MISSING),
-        ("pass", "missing", "block", DISP_MISSING),
-        ("missing", "missing", "missing", DISP_MISSING),
-    ],
-)
-def test_compute_disposition(regex: str, pg: str, cls_a: str, expected_disp: str) -> None:
-    disp = compute_disposition({"regex": regex, "promptguard": pg, "classifier_a": cls_a})
-    assert disp == expected_disp
-
-
-# ── handle: end-to-end ────────────────────────────────────────────────────────
-
-
-def test_handle_all_pass_emits_process() -> None:
-    resp = cmd_handle({}, _ctx())
-
-    assert resp["status"] == "ok"
-    assert len(resp["events"]) == 1
-    ev = resp["events"][0]
-    assert ev["type"] == EVENT_TYPE
-    assert ev["dedupe_key"] == f"{DEDUPE_PREFIX}M-1"
-    assert ev["payload"]["decision"] == DECISION_PROCESS
-    assert ev["payload"]["block_reasons"] == []
-    assert ev["payload"]["disposition"] == DISP_UNANIMOUS_PASS
-    assert ev["payload"]["scorer_verdicts"] == {
-        "regex": "pass",
-        "promptguard": "pass",
-        "classifier_a": "pass",
+) -> dict[str, Any]:
+    """Build a baggage context. Defaults are all-low/benign + unknown sender."""
+    return {
+        "mail": {"message_id": msg_id},
+        "scorer": {
+            "regex": {"max_weight": regex},
+            "promptguard": {"score": promptguard},
+            "sentinel": {"score": sentinel},
+            "classifier_a": {
+                "verdict": classifier_a_verdict,
+                "confidence": classifier_a_confidence,
+            },
+        },
+        "sender": {"trust_level": trust_level},
     }
 
 
-def test_handle_unanimous_block_emits_quarantine() -> None:
-    resp = cmd_handle({}, _ctx(regex="block", promptguard="block", classifier_a="block"))
+# ── read_scores ──────────────────────────────────────────────────────────────
+
+
+def test_read_scores_includes_sentinel() -> None:
+    scores = read_scores(_ctx(sentinel=0.42))
+    assert scores["sentinel"] == pytest.approx(0.42)
+    assert set(scores.keys()) == {"regex", "promptguard", "sentinel", "classifier_a"}
+
+
+def test_read_scores_classifier_a_block_uses_confidence() -> None:
+    scores = read_scores(_ctx(classifier_a_verdict="block", classifier_a_confidence=0.8))
+    assert scores["classifier_a"] == pytest.approx(0.8)
+
+
+def test_read_scores_classifier_a_pass_inverts_confidence() -> None:
+    scores = read_scores(_ctx(classifier_a_verdict="pass", classifier_a_confidence=0.9))
+    assert scores["classifier_a"] == pytest.approx(0.1)
+
+
+# ── fast-pass tier ───────────────────────────────────────────────────────────
+
+
+def test_all_four_low_fast_pass() -> None:
+    """All four scorers ≤ FAST_PASS_THRESHOLD → process via fast_pass."""
+    resp = cmd_handle(
+        {},
+        _ctx(
+            regex=0.05,
+            promptguard=0.05,
+            sentinel=0.05,
+            classifier_a_verdict="pass",
+            classifier_a_confidence=0.95,  # block_prob = 0.05
+        ),
+    )
+
+    assert resp["status"] == "ok"
+    ev = resp["events"][0]
+    assert ev["type"] == EVENT_TYPE
+    assert ev["payload"]["decision"] == DECISION_PROCESS
+    assert ev["payload"]["path"] == "fast_pass"
+    assert ev["payload"]["llm_score"] is None
+
+
+def test_sentinel_pass_with_others_pass_fast() -> None:
+    """All four scorers ≤ 0.10, decision=process, path=fast_pass."""
+    resp = cmd_handle(
+        {},
+        _ctx(
+            regex=0.10,
+            promptguard=0.10,
+            sentinel=0.10,
+            classifier_a_verdict="pass",
+            classifier_a_confidence=0.90,  # block_prob = 0.10
+        ),
+    )
+
+    assert resp["status"] == "ok"
+    ev = resp["events"][0]
+    assert ev["payload"]["decision"] == DECISION_PROCESS
+    assert ev["payload"]["path"] == "fast_pass"
+    assert ev["payload"]["llm_score"] is None
+
+
+def test_one_score_above_fast_pass_threshold_skips_fast_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If any score > FAST_PASS_THRESHOLD (but none ≥ FAST_BLOCK), goes to LLM."""
+    # Stub LLM to a low score so we don't need network + so we can detect llm path
+    monkeypatch.setattr("run._llm_adjudicate", lambda *a, **kw: 0.2)
+    resp = cmd_handle(
+        {},
+        _ctx(regex=0.05, promptguard=0.20, sentinel=0.05),
+    )
+    ev = resp["events"][0]
+    assert ev["payload"]["path"] == "llm_adjudicated"
+
+
+# ── fast-block tier ──────────────────────────────────────────────────────────
+
+
+def test_sentinel_only_block_fast_path() -> None:
+    """sentinel=0.95, others low, unknown sender → quarantine via fast_block."""
+    resp = cmd_handle(
+        {},
+        _ctx(
+            regex=0.05,
+            promptguard=0.05,
+            sentinel=0.95,
+            classifier_a_verdict="pass",
+            classifier_a_confidence=0.95,  # block_prob = 0.05
+            trust_level=TRUST_UNKNOWN,
+        ),
+    )
 
     assert resp["status"] == "ok"
     ev = resp["events"][0]
     assert ev["payload"]["decision"] == DECISION_QUARANTINE
-    assert ev["payload"]["disposition"] == DISP_UNANIMOUS_BLOCK
-    assert ev["payload"]["block_reasons"] == ["regex", "promptguard", "classifier_a"]
+    assert ev["payload"]["path"] == "fast_block"
+    assert ev["payload"]["trust_level"] == TRUST_UNKNOWN
+    assert ev["payload"]["llm_score"] is None
+    assert ev["payload"]["scores"]["sentinel"] == pytest.approx(0.95)
 
 
-def test_handle_regex_only_block_quarantines_with_audit_tag() -> None:
-    resp = cmd_handle({}, _ctx(regex="block", promptguard="pass", classifier_a="pass"))
-
-    assert resp["status"] == "ok"
+def test_regex_high_unknown_sender_fast_block() -> None:
+    resp = cmd_handle({}, _ctx(regex=0.95, trust_level=TRUST_UNKNOWN))
     ev = resp["events"][0]
     assert ev["payload"]["decision"] == DECISION_QUARANTINE
-    assert ev["payload"]["disposition"] == DISP_REGEX_ONLY
-    assert ev["payload"]["block_reasons"] == ["regex"]
+    assert ev["payload"]["path"] == "fast_block"
 
 
-def test_handle_classifiers_only_block() -> None:
-    resp = cmd_handle({}, _ctx(regex="pass", promptguard="block", classifier_a="block"))
+def test_promptguard_high_unknown_sender_fast_block() -> None:
+    resp = cmd_handle({}, _ctx(promptguard=0.95, trust_level=TRUST_UNKNOWN))
+    ev = resp["events"][0]
+    assert ev["payload"]["path"] == "fast_block"
 
+
+def test_trusted_sender_skips_fast_block_routes_to_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trusted sender with high score MUST escalate to LLM, not fast_block."""
+    monkeypatch.setattr("run._llm_adjudicate", lambda *a, **kw: 0.3)
+    resp = cmd_handle(
+        {},
+        _ctx(sentinel=0.95, trust_level=TRUST_TRUSTED),
+    )
+    ev = resp["events"][0]
+    assert ev["payload"]["path"] == "llm_adjudicated"
+    assert ev["payload"]["trust_level"] == TRUST_TRUSTED
+
+
+# ── LLM path ─────────────────────────────────────────────────────────────────
+
+
+def test_llm_high_score_quarantines(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("run._llm_adjudicate", lambda *a, **kw: 0.85)
+    resp = cmd_handle({}, _ctx(promptguard=0.40, sentinel=0.40))
     ev = resp["events"][0]
     assert ev["payload"]["decision"] == DECISION_QUARANTINE
-    assert ev["payload"]["disposition"] == DISP_CLASSIFIERS_ONLY
+    assert ev["payload"]["path"] == "llm_adjudicated"
+    assert ev["payload"]["llm_score"] == pytest.approx(0.85)
 
 
-def test_handle_missing_scorer_quarantines() -> None:
-    resp = cmd_handle({}, _ctx(promptguard=None))
+def test_llm_low_score_processes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("run._llm_adjudicate", lambda *a, **kw: 0.20)
+    resp = cmd_handle({}, _ctx(promptguard=0.40, sentinel=0.40))
+    ev = resp["events"][0]
+    assert ev["payload"]["decision"] == DECISION_PROCESS
+    assert ev["payload"]["path"] == "llm_adjudicated"
 
-    assert resp["status"] == "ok"
+
+def test_llm_failure_falls_back_to_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: Any, **_kw: Any) -> float:
+        import urllib.error
+
+        raise urllib.error.URLError("boom")
+
+    monkeypatch.setattr("run._llm_adjudicate", _raise)
+    resp = cmd_handle({}, _ctx(promptguard=0.40, sentinel=0.40))
     ev = resp["events"][0]
     assert ev["payload"]["decision"] == DECISION_QUARANTINE
-    assert ev["payload"]["disposition"] == DISP_MISSING
-    assert ev["payload"]["scorer_verdicts"]["promptguard"] == VERDICT_MISSING
-    assert "promptguard" in ev["payload"]["block_reasons"]
-    assert any("strict-three" in log["message"] for log in resp["logs"])
+    assert ev["payload"]["path"] == "llm_fallback"
+    assert ev["payload"]["llm_score"] is None
 
 
-def test_handle_invalid_verdict_value_treated_as_missing() -> None:
-    """If a scorer emits something other than 'block'/'pass', strict-three triggers."""
-    ctx = _ctx()
-    ctx["scorer"]["regex"] = {"verdict": "WAT"}  # type: ignore[index]
-
-    resp = cmd_handle({}, ctx)
-
+def test_llm_unparseable_response_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("run._llm_adjudicate", lambda *a, **kw: None)
+    resp = cmd_handle({}, _ctx(promptguard=0.40, sentinel=0.40))
     ev = resp["events"][0]
-    assert ev["payload"]["scorer_verdicts"]["regex"] == VERDICT_MISSING
+    assert ev["payload"]["path"] == "llm_fallback"
     assert ev["payload"]["decision"] == DECISION_QUARANTINE
+
+
+# ── emitted payload structure ────────────────────────────────────────────────
+
+
+def test_sentinel_in_emitted_scores() -> None:
+    """Verify the emitted event payload has scores.sentinel with correct value."""
+    resp = cmd_handle({}, _ctx(sentinel=0.07))
+    ev = resp["events"][0]
+    assert "sentinel" in ev["payload"]["scores"]
+    assert ev["payload"]["scores"]["sentinel"] == pytest.approx(0.07)
+    # All four keys present
+    assert set(ev["payload"]["scores"].keys()) == {
+        "regex",
+        "promptguard",
+        "sentinel",
+        "classifier_a",
+    }
+
+
+def test_dedupe_key_uses_prefix() -> None:
+    resp = cmd_handle({}, _ctx(msg_id="<abc@example.com>"))
+    assert resp["events"][0]["dedupe_key"] == f"{DEDUPE_PREFIX}<abc@example.com>"
+
+
+# ── error paths ──────────────────────────────────────────────────────────────
 
 
 def test_handle_missing_message_id_errors() -> None:
     resp = cmd_handle({}, {"mail": {}, "scorer": {}})
-
     assert resp["status"] == "error"
     assert "message_id" in resp["error"]
 
 
 def test_handle_missing_mail_errors() -> None:
     resp = cmd_handle({}, {"scorer": {}})
-
     assert resp["status"] == "error"
     assert "context.mail" in resp["error"]
 
 
-def test_handle_dedupe_key_uses_prefix() -> None:
-    resp = cmd_handle({}, _ctx(msg_id="<abc@example.com>"))
-
-    assert resp["status"] == "ok"
-    assert resp["events"][0]["dedupe_key"] == f"{DEDUPE_PREFIX}<abc@example.com>"
+# ── thresholds & defaults pinned (regression guards) ─────────────────────────
 
 
-# ── verdict normalisation ─────────────────────────────────────────────────────
+def test_thresholds_unchanged() -> None:
+    assert FAST_PASS_THRESHOLD == 0.15
+    assert FAST_BLOCK_THRESHOLD == 0.90
+    assert LLM_BLOCK_THRESHOLD == 0.5
 
 
-def test_handle_verdict_uppercase_normalised() -> None:
-    ctx = _ctx()
-    ctx["scorer"]["regex"] = {"verdict": "BLOCK"}  # type: ignore[index]
-
-    resp = cmd_handle({}, ctx)
-
-    ev = resp["events"][0]
-    assert ev["payload"]["scorer_verdicts"]["regex"] == "block"
-    assert ev["payload"]["decision"] == DECISION_QUARANTINE
-
-
-# ── health ────────────────────────────────────────────────────────────────────
-
-
-def test_health() -> None:
+def test_health_reports_5_input_fusion() -> None:
     resp = cmd_health({})
-
     assert resp["status"] == "ok"
-    assert "veto" in resp["result"]
+    assert "5-input" in resp["result"]
 
 
-# ── unknown / bad input ───────────────────────────────────────────────────────
+# ── stdin entrypoint ─────────────────────────────────────────────────────────
 
 
 def test_unknown_command_errors(monkeypatch: pytest.MonkeyPatch) -> None:

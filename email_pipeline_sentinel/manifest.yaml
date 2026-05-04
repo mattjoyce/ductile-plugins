@@ -1,0 +1,38 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: email_pipeline_sentinel
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Stage 4b of the ductile email pipeline. Sentinel v2 prompt-injection scorer hosted on Unraid GPU. Reads sanitised text from durable baggage; emits email.scored.sentinel with verdict + per-part scores."
+concurrency_safe: true
+commands:
+  - name: handle
+    type: write
+    description: "Score sanitised email text against Sentinel v2. Reads context.mail.parts and context.mail.message_id; emits email.scored.sentinel with verdict, score, decision, reason, per_part_scores."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume:
+        - payload.message_id
+        - payload.parts
+      emit:
+        - event: email.scored.sentinel
+          values:
+            - payload.message_id
+            - payload.verdict
+            - payload.score
+            - payload.decision
+            - payload.reason
+            - payload.per_part_scores
+  - name: health
+    type: read
+    description: "Pre-warm Sentinel v2 model and verify a benign input scans cleanly. Surfaces HF auth/model-load errors."
+    idempotent: true
+    retry_safe: true
+config_keys:
+  required: []
+  optional:
+    - endpoint_url
+    - request_timeout_s
+    - per_part_max_chars

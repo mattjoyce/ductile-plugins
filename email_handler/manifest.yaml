@@ -4,7 +4,7 @@ name: email_handler
 version: 0.1.0
 protocol: 2
 entrypoint: run.py
-description: "Handle incoming gmail.new_message events: fetch full body via gws, dispatch to PAI (claude -p) for action."
+description: "Final stage of the ductile email pipeline. Handles email.process_decision events with decision='process'. Fetches full body via gws, loads prompt template from configured path (kept out of repo), dispatches to claude -p for action. Claude decides reply / bd task / ignore."
 commands:
   - name: handle
     type: write
@@ -24,7 +24,8 @@ commands:
     idempotent: true
     retry_safe: true
 config_keys:
-  required: []
+  required:
+    - prompt_template_path
   optional:
     - gws_binary
     - claude_binary

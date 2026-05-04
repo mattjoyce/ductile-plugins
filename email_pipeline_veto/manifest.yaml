@@ -1,15 +1,15 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: email_pipeline_veto
-version: 0.2.0
+version: 0.3.0
 protocol: 2
 entrypoint: run.py
-description: "Stage 6 of the ductile email pipeline. 4-judge tiered fusion: fast-pass (all scores ≤ 0.15), fast-block (any score ≥ 0.90, unknown sender), LLM-adjudicated (edge cases + trusted-sender high-score). Emits email.process_decision."
+description: "Stage 6 of the ductile email pipeline. 5-input tiered fusion (4 scorers + sender trust): fast-pass (all scores ≤ 0.15), fast-block (any score ≥ 0.90, unknown sender), LLM-adjudicated (edge cases + trusted-sender high-score). Emits email.process_decision."
 concurrency_safe: true
 commands:
   - name: handle
     type: write
-    description: "Apply 4-judge tiered fusion. Reads context.mail.message_id, context.scorer.{regex,promptguard,classifier_a}, context.sender.trust_level; emits email.process_decision with decision, path, trust_level, scores, llm_score."
+    description: "Apply 5-input tiered fusion. Reads context.mail.message_id, context.scorer.{regex,promptguard,sentinel,classifier_a}, context.sender.trust_level; emits email.process_decision with decision, path, trust_level, scores, llm_score."
     idempotent: true
     retry_safe: true
     values:

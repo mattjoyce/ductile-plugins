@@ -6,17 +6,24 @@
 """email_handler — Ductile plugin (protocol v2).
 
 Handles email.process_decision events where decision == "process".
-By the time this runs, the email has cleared a 4-judge security pipeline
-(regex + PG2 BERT + classifier_a + optional LLM adjudicator). Trust level
-and pipeline path are available in the event payload.
+By the time this runs, the email has cleared the upstream security pipeline
+(regex + PG2 BERT + Sentinel v2 + Superagent 4B + optional LLM adjudicator).
+Trust level, pipeline path, and per-scorer block-probabilities are available
+in the event payload.
 
 Steps:
   1. Read upstream pipeline facts (trust_level, path, scores) from event payload
   2. Fetch full message via gws to get From, Subject, body text
-  3. Build a context-aware prompt and dispatch to claude -p
-  4. claude decides: reply, create bd task, or ignore
+  3. Load prompt template from configured path, substitute placeholders
+  4. Dispatch to claude -p; claude decides reply / bd task / ignore
 
-Config keys (all optional):
+The prompt template lives outside this repo (see prompt.example.md for the
+shape). Place the customised template at the path given by `prompt_template_path`
+config. The plugin requires this config to be set — there is no inline default
+prompt to keep personal instructions out of the public repo.
+
+Config keys:
+  prompt_template_path      (str, REQUIRED) — path to prompt template file
   gws_binary                (str, default: "gws")
   claude_binary             (str, default: "/Users/mattjoyce/.local/bin/claude")
   claude_working_dir        (str, default: "/Users/mattjoyce/.claude")
@@ -33,6 +40,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 DEFAULT_GWS = "gws"
@@ -41,6 +49,11 @@ DEFAULT_CLAUDE_CWD = "/Users/mattjoyce/.claude"
 DEFAULT_TIMEOUT = 300
 DEFAULT_GWS_FETCH_TIMEOUT = 30
 BODY_TRUNCATE_CHARS = 6000
+
+REQUIRED_PLACEHOLDERS = (
+    "from_addr", "subject", "message_id",
+    "trust_level", "pipeline_path", "score_summary", "body",
+)
 
 
 def iso_now() -> str:
@@ -154,13 +167,24 @@ def fetch_message(gws: str, message_id: str, timeout: int) -> tuple[str, str, st
         return "", "", "", "[fetch timed out]", logs
 
 
+def load_prompt_template(path: str) -> str:
+    """Load and return the prompt template from disk. Raises on missing file or missing placeholders."""
+    template_path = Path(os.path.expanduser(path))
+    if not template_path.is_file():
+        raise FileNotFoundError(f"prompt template not found: {template_path}")
+    template = template_path.read_text(encoding="utf-8")
+    missing = [p for p in REQUIRED_PLACEHOLDERS if "{" + p + "}" not in template]
+    if missing:
+        raise ValueError(f"prompt template at {template_path} missing required placeholders: {missing}")
+    return template
+
+
 def build_prompt(
+    template: str,
     from_addr: str,
     subject: str,
-    snippet: str,
     message_id: str,
     body: str,
-    gws: str,
     trust_level: str,
     pipeline_path: str,
     scores: dict[str, float],
@@ -169,28 +193,19 @@ def build_prompt(
     score_summary = (
         f"regex={scores.get('regex', 0):.2f}, "
         f"pg2={scores.get('promptguard', 0):.2f}, "
-        f"classifier={scores.get('classifier_a', 0):.2f}"
+        f"sentinel={scores.get('sentinel', 0):.2f}, "
+        f"superagent={scores.get('classifier_a', 0):.2f}"
         + (f", llm={llm_score:.2f}" if llm_score is not None else "")
     )
-
-    return f"""You are Matt's personal email assistant. An email has arrived and cleared the security pipeline — handle it.
-
-From: {from_addr}
-Subject: {subject}
-Message ID: {message_id}
-Sender trust: {trust_level} | Pipeline: {pipeline_path} | Scores: {score_summary}
-
-Body:
-{body}
-
-Read the email and do whatever makes sense. You have full latitude — reply, create a bd task, look something up, ignore it, whatever is most useful to Matt. Use your judgment.
-
-A few tools you have available:
-  - bd create/update/close for task tracking (run from ~/.claude)
-  - {gws} gmail users messages send --params '{{"userId":"me"}}' --body '{{"raw":"<base64-encoded message>"}}' to reply
-  - Any other tool or command available in the working directory
-
-If you reply, keep it natural and concise. If you create a task, make the title and description useful. If it's noise, just say so and move on."""
+    return template.format(
+        from_addr=from_addr,
+        subject=subject,
+        message_id=message_id,
+        trust_level=trust_level,
+        pipeline_path=pipeline_path,
+        score_summary=score_summary,
+        body=body,
+    )
 
 
 def handle_email(req: dict[str, Any]) -> dict[str, Any]:
@@ -216,6 +231,10 @@ def handle_email(req: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             llm_score = None
 
+    prompt_template_path = config.get("prompt_template_path")
+    if not prompt_template_path:
+        return plugin_error("config.prompt_template_path is required", retry=False)
+
     gws = str(config.get("gws_binary", DEFAULT_GWS))
     claude = str(config.get("claude_binary", DEFAULT_CLAUDE))
     cwd = str(config.get("claude_working_dir", DEFAULT_CLAUDE_CWD))
@@ -224,11 +243,16 @@ def handle_email(req: dict[str, Any]) -> dict[str, Any]:
 
     logs: list[dict] = [{"level": "info", "message": f"handling {message_id} trust={trust_level} path={pipeline_path}"}]
 
+    try:
+        template = load_prompt_template(str(prompt_template_path))
+    except (FileNotFoundError, ValueError) as exc:
+        return plugin_error(str(exc), retry=False, logs=logs)
+
     from_addr, subject, snippet, body, fetch_logs = fetch_message(gws, message_id, gws_timeout)
     logs.extend(fetch_logs)
 
     prompt = build_prompt(
-        from_addr, subject, snippet, message_id, body, gws,
+        template, from_addr, subject, message_id, body,
         trust_level, pipeline_path, scores, llm_score,
     )
 
