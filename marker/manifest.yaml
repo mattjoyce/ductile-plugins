@@ -1,0 +1,33 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: marker
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Wraps the marker:latest Docker image to convert PDFs to Markdown via a transient GPU container per document."
+concurrency_safe: true
+commands:
+  - name: submit
+    type: write
+    description: "Spawn a detached marker:latest container to convert a single PDF to Markdown. Returns container_id as job_id."
+    idempotent: false
+    retry_safe: true
+    input_schema:
+      source: string
+      output_dir: string
+      doc_id: string
+  - name: status
+    type: read
+    description: "Inspect a previously-submitted marker container and report its conversion state."
+    idempotent: true
+    retry_safe: true
+    input_schema:
+      job_id: string
+  - name: health
+    type: read
+    description: "Verify the docker CLI is reachable and the marker:latest image is present on the host."
+    idempotent: true
+    retry_safe: true
+config_keys:
+  required: []
+  optional: []
