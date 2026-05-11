@@ -1,24 +1,45 @@
 #!/usr/bin/env python3
 """marker: Wrap the marker:latest Docker image for PDF -> Markdown conversion.
 
-Protocol v2 plugin. Spawns a transient GPU-backed `marker:latest` container
-per PDF (`submit`), then polls its lifecycle via `docker inspect` (`status`).
+Protocol v2 plugin. Spawns a transient `marker:latest` container per PDF
+(`handle`), then polls its lifecycle via `docker inspect` (`status`).
 
 Conversion happens out-of-process inside the marker container. The plugin
 itself is always sub-second: it shells out to `docker run -d` (detached) on
-submit, and `docker inspect` on status.
+handle, and `docker inspect` on status.
+
+The plugin runs *inside* the Ductile container but the `docker run` it issues
+is executed by the *host* daemon (the docker socket is bind-mounted), so any
+path it names in a `-v`/`--mount` is resolved against the host filesystem, not
+Ductile's. To avoid that "two realities" trap entirely, the shared library is a
+named Docker *volume* (a daemon-level object — realm-independent): the plugin
+mounts it by name, and callers name their input/output paths *inside* that
+volume's mountpoint (`/library/...`). No host paths cross the boundary; no
+translation is needed.
 
 The container is invoked as:
 
-    docker run --rm -d \
-      -v marker_models:/root/.cache/datalab \
-      -v <output_dir>:/output \
-      -v <input_pdf>:/input/in.pdf:ro \
-      --label marker.output_path=<output_dir>/<doc_id>.md \
+    docker run --rm -d --cpus 8 \
+      --mount type=volume,source=marker_models,target=/root/.cache/datalab \
+      --mount type=volume,source=<library_volume>,target=/library \
+      --label marker.output_path=<put> \
       --label marker.doc_id=<doc_id> \
-      marker:latest /input/in.pdf /output/<doc_id>.md
+      marker:latest <get> <put>
 
-Exit 0 + the labelled output_path on disk = `ready`. Anything else = `failed`.
+where <get>/<put> are absolute paths *inside* the library volume's mountpoint,
+e.g. /library/inbound/raw/foo.pdf and /library/inbound/converted/foo.md.
+
+Exit 0 + the labelled output path on disk = `ready`. Anything else = `failed`.
+
+Input contract for `handle`:
+  - get: string  — input path inside /library (the PDF to convert)
+  - put: string  — output path inside /library (the .md to produce)
+  - doc_id: string (optional — defaults to the basename of `put` without ext;
+            only used as a container label for observability)
+  - library_volume: string (optional — overrides config; defaults to the
+            `library_volume` config key, then to "parsem_library")
+  Back-compat: if `get`/`put` are absent, `source`/`output_dir`/`doc_id` are
+  accepted and `put` is synthesised as `<output_dir>/<doc_id>.md`, `get` <- `source`.
 """
 
 from __future__ import annotations
@@ -33,12 +54,12 @@ from typing import Any
 MARKER_IMAGE = "marker:latest"
 MODELS_VOLUME = "marker_models"
 MODELS_MOUNT = "/root/.cache/datalab"
+LIBRARY_MOUNT = "/library"
+DEFAULT_LIBRARY_VOLUME = "parsem_library"
 LOG_TAIL_LINES = 100
 
 # Cap marker's container at 8 cores (of the box's 12). Marker is async
 # background work; leaving 4 cores for ductile, llama-swap, sentinel, etc.
-# The image's torch/BLAS env vars match this cap so threads don't
-# oversubscribe within the budget.
 MARKER_CPU_LIMIT = "8"
 
 # CUDA OOM surfaces as exit-non-zero from the detached marker container, NOT as
@@ -100,22 +121,25 @@ class DockerRunner:
     @staticmethod
     def run(
         image: str,
-        mounts: list[tuple[str, str, str]],
+        mounts: list[tuple[str, str, bool]],
         args: list[str],
         labels: dict[str, str] | None = None,
     ) -> str:
         """Spawn a detached container and return its container_id.
 
-        `mounts` is a list of (host_or_volume, container_path, mode) tuples
-        where mode is e.g. "rw" or "ro" (or "" to omit). The marker image
-        is CPU-only on the current Unraid GPU-budget; no `--gpus` flag.
+        `mounts` is a list of (volume_name, target_path, readonly) tuples — all
+        mounts are named Docker volumes (`--mount type=volume,...`). Using
+        `--mount` (not `-v`) means the daemon ERRORS if the named volume does
+        not exist, instead of silently creating an empty one — fail loud.
+        The marker image is CPU-only on the current Unraid GPU budget; no
+        `--gpus` flag.
         """
         mount_flags: list[str] = []
-        for src, dst, mode in mounts:
-            spec = f"{src}:{dst}"
-            if mode:
-                spec = f"{spec}:{mode}"
-            mount_flags.extend(["-v", spec])
+        for vol, target, readonly in mounts:
+            spec = f"type=volume,source={vol},target={target}"
+            if readonly:
+                spec = f"{spec},readonly"
+            mount_flags.extend(["--mount", spec])
 
         label_flags: list[str] = []
         for key, value in (labels or {}).items():
@@ -189,6 +213,34 @@ class DockerRunner:
         )
 
     @staticmethod
+    def reap_exited(image: str) -> list[str]:
+        """Remove all *exited* containers spawned from `image`. Best-effort.
+
+        Marker containers aren't run with `--rm` (so `status` can inspect a
+        finished one), and the pipeline flow never calls `status` — so exited
+        marker containers would otherwise pile up. We sweep them at the start of
+        each `handle`. Safe: the conversion output already landed on disk before
+        the container exited (atomic-write contract), and a just-finished
+        container would have been status-read within seconds, not minutes later
+        when a new `handle` arrives. Returns the ids removed.
+        """
+        try:
+            proc = subprocess.run(
+                ["docker", "ps", "-aq", "--filter", f"ancestor={image}", "--filter", "status=exited"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except (FileNotFoundError, OSError):
+            return []
+        if proc.returncode != 0:
+            return []
+        ids = [cid for cid in (proc.stdout or "").split() if cid]
+        for cid in ids:
+            DockerRunner.rm(cid)
+        return ids
+
+    @staticmethod
     def logs(container_id: str, tail: int = LOG_TAIL_LINES) -> str:
         proc = subprocess.run(
             ["docker", "logs", "--tail", str(tail), container_id],
@@ -236,43 +288,94 @@ def handle_health() -> dict[str, Any]:
     )
 
 
-def _spawn_marker(
-    source: str,
-    output_dir: str,
-    doc_id: str,
-) -> str:
-    """Single-shot marker spawn. Raises on docker failure."""
-    output_path_in_container = f"/output/{doc_id}.md"
-    output_path_on_host = os.path.join(output_dir, f"{doc_id}.md")
+def _spawn_marker(get_path: str, put_path: str, doc_id: str, library_volume: str) -> str:
+    """Single-shot marker spawn. Raises on docker failure.
 
+    Mounts the model cache and the shared library volume; `get_path`/`put_path`
+    are absolute paths *inside* the library volume's mountpoint and are passed
+    straight through as the marker image's two positional args.
+    """
     mounts = [
-        (MODELS_VOLUME, MODELS_MOUNT, ""),
-        (output_dir, "/output", ""),
-        (source, "/input/in.pdf", "ro"),
+        (MODELS_VOLUME, MODELS_MOUNT, False),
+        (library_volume, LIBRARY_MOUNT, False),  # RW: marker writes the .md/.json/_images under here
     ]
     labels = {
-        "marker.output_path": output_path_on_host,
+        "marker.output_path": put_path,
         "marker.doc_id": doc_id,
     }
-    args = ["/input/in.pdf", output_path_in_container]
+    args = [get_path, put_path]
     return DockerRunner.run(MARKER_IMAGE, mounts, args, labels=labels)
 
 
-def handle_submit(payload: dict[str, Any]) -> dict[str, Any]:
-    source = str(payload.get("source") or "").strip()
-    output_dir = str(payload.get("output_dir") or "").strip()
+def _resolve_handle_inputs(
+    payload: dict[str, Any], config: dict[str, Any]
+) -> tuple[str, str, str, str]:
+    """Pull (get, put, doc_id, library_volume) from the payload, applying the
+    back-compat synthesis from source/output_dir/doc_id."""
+    get_path = str(payload.get("get") or payload.get("source") or "").strip()
+    put_path = str(payload.get("put") or "").strip()
     doc_id = str(payload.get("doc_id") or "").strip()
+    if not put_path:
+        output_dir = str(payload.get("output_dir") or "").strip()
+        if output_dir and doc_id:
+            put_path = os.path.join(output_dir, f"{doc_id}.md")
+    if not doc_id and put_path:
+        doc_id = os.path.splitext(os.path.basename(put_path))[0]
+    library_volume = str(
+        config.get("library_volume")
+        or payload.get("library_volume")
+        or DEFAULT_LIBRARY_VOLUME
+    ).strip()
+    return get_path, put_path, doc_id, library_volume
 
-    missing = [k for k, v in (("source", source), ("output_dir", output_dir), ("doc_id", doc_id)) if not v]
+
+def handle_handle(payload: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    """Event-handler entrypoint — spawns the marker container.
+
+    Named `handle` (not `submit`) because Ductile's pipeline `uses:` routing
+    only recognises the standard command names poll/handle/health/init.
+    The verb in logs/events is still "submit"/"spawn" for clarity."""
+    # Sweep stale exited marker containers from prior conversions before starting
+    # a new one (we don't run with --rm so `status` can inspect a finished job;
+    # the pipeline flow never calls `status`, so they'd otherwise accumulate).
+    reaped = DockerRunner.reap_exited(MARKER_IMAGE)
+
+    get_path, put_path, doc_id, library_volume = _resolve_handle_inputs(payload, config)
+
+    missing = [k for k, v in (("get", get_path), ("put", put_path)) if not v]
     if missing:
-        msg = f"missing required field(s): {', '.join(missing)}"
-        return error_response(
-            msg,
-            logs=[{"level": "error", "message": f"submit: {msg}"}],
+        msg = (
+            f"missing required field(s): {', '.join(missing)} "
+            "(provide get/put, or source/output_dir/doc_id)"
+        )
+        return error_response(msg, logs=[{"level": "error", "message": f"submit: {msg}"}])
+
+    # Sanity: `get`/`put` are paths inside the library volume — must be absolute,
+    # no `..` traversal. (Not a host bind source, so this is malformed-input
+    # rejection, not a sandbox escape concern.)
+    for name, p in (("get", get_path), ("put", put_path)):
+        if not p.startswith("/") or ".." in p.split("/"):
+            msg = f"invalid {name} path: {p!r} (must be an absolute path with no '..')"
+            return error_response(msg, logs=[{"level": "error", "message": f"submit: {msg}"}])
+
+    extra_logs: list[dict[str, str]] = []
+    if reaped:
+        extra_logs.append(
+            {"level": "info", "message": f"reaped {len(reaped)} exited marker container(s) before submit"}
+        )
+    if not get_path.startswith(LIBRARY_MOUNT + "/") or not put_path.startswith(LIBRARY_MOUNT + "/"):
+        extra_logs.append(
+            {
+                "level": "warn",
+                "message": (
+                    f"get/put are not under {LIBRARY_MOUNT}/ — only {LIBRARY_MOUNT} and "
+                    f"{MODELS_MOUNT} are mounted in the marker container, so this will likely fail"
+                ),
+            }
         )
 
     try:
-        container_id = _spawn_marker(source, output_dir, doc_id)
+        container_id = _spawn_marker(get_path, put_path, doc_id, library_volume)
     except FileNotFoundError:
         return error_response(
             "docker CLI not found on PATH",
@@ -286,12 +389,16 @@ def handle_submit(payload: dict[str, Any]) -> dict[str, Any]:
 
     return ok_response(
         result="running",
-        state_updates={"job_id": container_id, "state": "running"},
+        state_updates={"job_id": container_id, "state": "running", "output_path": put_path},
         logs=[
+            *extra_logs,
             {
                 "level": "info",
-                "message": f"spawned marker container {container_id[:12]} for doc_id={doc_id}",
-            }
+                "message": (
+                    f"spawned marker container {container_id[:12]} for doc_id={doc_id}: "
+                    f"{get_path} -> {put_path} (volume={library_volume})"
+                ),
+            },
         ],
     )
 
@@ -344,17 +451,20 @@ def handle_status(payload: dict[str, Any]) -> dict[str, Any]:
         # anyway). Filesystem verification is the caller's concern, not ours.
         if exit_code == 0:
             DockerRunner.rm(job_id)
+            # Report the *realpath* of what was written — honest about where it
+            # actually landed (symlinks resolved), not just the path we asked for.
+            real_output = os.path.realpath(output_path) if output_path else output_path
             return ok_response(
                 result="ready",
                 state_updates={
                     "job_id": job_id,
                     "state": "ready",
-                    "output_path": output_path,
+                    "output_path": real_output,
                 },
                 logs=[
                     {
                         "level": "info",
-                        "message": f"{job_id[:12]} ready (output={output_path})",
+                        "message": f"{job_id[:12]} ready (output={real_output})",
                     }
                 ],
             )
@@ -398,17 +508,34 @@ def handle_status(payload: dict[str, Any]) -> dict[str, Any]:
 
 def handle_request(request: dict[str, Any]) -> dict[str, Any]:
     command = str(request.get("command") or "").strip()
+
+    # Assemble the input payload from every place Ductile might put it:
+    #  1. request["payload"]            — direct HTTP-API callers, raw events
+    #  2. request["event"]["payload"]   — `handle` jobs dispatched via a
+    #     pipeline: Ductile applies the step's `with:` remap to the *event*
+    #     payload, so the remapped fields arrive here, NOT under the top-level
+    #     "payload" key (see ductile docs/PLUGIN_DEVELOPMENT.md §2.1).
+    #  3. bare top-level fields         — callers that pass inputs flat
+    # Later sources win, so a pipeline's `with:` remap overrides the raw event.
+    payload: dict[str, Any] = {}
     raw_payload = request.get("payload")
-    payload: dict[str, Any] = dict(raw_payload) if isinstance(raw_payload, dict) else {}
-    # Tolerate top-level fields too (some callers pass input fields directly).
-    for key in ("source", "output_dir", "doc_id", "job_id"):
+    if isinstance(raw_payload, dict):
+        payload.update(raw_payload)
+    event = request.get("event")
+    if isinstance(event, dict):
+        event_payload = event.get("payload")
+        if isinstance(event_payload, dict):
+            payload.update(event_payload)
+    for key in ("get", "put", "source", "output_dir", "doc_id", "job_id", "library_volume"):
         if key not in payload and key in request:
             payload[key] = request[key]
 
+    config = request.get("config") if isinstance(request.get("config"), dict) else {}
+
     if command == "health":
         return handle_health()
-    if command == "submit":
-        return handle_submit(payload)
+    if command == "handle":
+        return handle_handle(payload, config)
     if command == "status":
         return handle_status(payload)
     return error_response(

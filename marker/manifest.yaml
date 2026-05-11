@@ -1,24 +1,27 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: marker
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Wraps the marker:latest Docker image to convert PDFs to Markdown via a transient GPU container per document."
+description: "Wraps the marker:latest Docker image to convert PDFs to Markdown via a transient container per document. Mounts a shared library named-volume; callers name input/output paths inside it (/library/...)."
 concurrency_safe: true
 commands:
-  - name: submit
+  - name: handle
     type: write
-    description: "Spawn a detached marker:latest container to convert a single PDF to Markdown. Returns container_id as job_id."
+    description: "Event-handler: spawn a detached marker:latest container to convert one PDF to Markdown. Reads `get` (input path) and `put` (output path) — both absolute paths inside the library volume's mountpoint, e.g. /library/inbound/raw/foo.pdf and /library/inbound/converted/foo.md — plus optional `doc_id` (container label only) and `library_volume` (overrides the `library_volume` config key). Back-compat: `source`/`output_dir`/`doc_id` are accepted and `put` is synthesised as <output_dir>/<doc_id>.md, `get` <- `source`. Returns container_id as job_id and `output_path` as the put path."
     idempotent: false
     retry_safe: true
     input_schema:
+      get: string
+      put: string
+      doc_id: string
+      library_volume: string
       source: string
       output_dir: string
-      doc_id: string
   - name: status
     type: read
-    description: "Inspect a previously-submitted marker container and report its conversion state."
+    description: "Inspect a previously-submitted marker container and report its conversion state. On success returns `output_path` as the realpath of what was written."
     idempotent: true
     retry_safe: true
     input_schema:
@@ -30,4 +33,5 @@ commands:
     retry_safe: true
 config_keys:
   required: []
-  optional: []
+  optional:
+    - library_volume
