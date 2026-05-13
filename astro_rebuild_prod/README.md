@@ -77,6 +77,19 @@ Before adding this plugin, the ductile instance must already have:
 
 ## Quick start (operator setup)
 
+> **Where am I editing this?** All YAML edits below happen **on the Unraid
+> host** (`ssh root@<unraid>`), in `/mnt/user/appdata/ductile/config/`. Do
+> NOT edit via the NAS Samba mount — the canonical Unraid deploy runbook
+> makes that "pull-only" because SMB oplocks block follow-up operations.
+> The *plugin source* (`astro_rebuild_prod/`) is a different story — that
+> lives under `/mnt/user/Projects/ductile-plugins/` and gets there via
+> `git pull` from your dev machine's commits.
+
+> **Two listener ports.** Ductile has two HTTP listeners by design — `8888`
+> is the authenticated **control API** (Bearer-token, scoped), `8091` is the
+> **webhook ingress** (HMAC-signed, body-as-trigger). The verify step uses
+> 8888; the trigger uses 8091. They are separate listeners, not a typo.
+
 There are five things to put in place. Order matters because ductile validates
 checksums of the high-security files at startup.
 
@@ -89,7 +102,8 @@ echo "$SECRET"   # save this — you'll need it on both ends
 
 ### 2. Make the secret available inside the ductile container
 
-Add the line to `/mnt/user/appdata/ductile/.env` (docker-compose auto-reads it):
+Add the line to `/mnt/user/appdata/ductile/.env` (docker-compose auto-reads
+it; the file may not exist yet — create it):
 
 ```
 MATTJOYCE_PUBLISH_SECRET=<SECRET-from-step-1>
@@ -101,6 +115,10 @@ And reference it from the ductile `docker-compose.yml` `environment:` block:
 environment:
   - MATTJOYCE_PUBLISH_SECRET=${MATTJOYCE_PUBLISH_SECRET:-}
 ```
+
+> **Gotcha:** `.env` is only re-read on `docker compose up` — NOT on
+> `docker restart`. After changing the secret, step 5 uses `docker compose
+> up -d` for that reason.
 
 ### 3. Add the three config entries
 
@@ -149,24 +167,40 @@ In ductile's `docker-compose.yml`, under `volumes:`:
 - /mnt/user/appdata/matt_joyce:/mnt/user/appdata/matt_joyce:ro
 ```
 
-### 5. Refresh checksums and restart
+### 5. Refresh checksums and bring up
+
+There are three small operations here:
 
 ```bash
-# Rebuild ductile (picks up the new plugin via additional build context)
+# (a) Rebuild the ductile image so the new plugin folder gets baked in.
+#     The Dockerfile uses `COPY --from=plugins-extra .` to pull
+#     /mnt/user/Projects/ductile-plugins/ at build time — make sure your
+#     new plugin folder is already on the Unraid filesystem there (via
+#     `git pull` on Unraid), otherwise the bake will skip it silently.
 cd /mnt/user/appdata/ductile && docker compose up --build -d
 
-# Refresh config lock — tokens.yaml + webhooks.yaml are high-security
+# (b) Refresh the config lock — tokens.yaml + webhooks.yaml are high-security
+#     and refuse to load on checksum mismatch.  This needs a one-shot
+#     CONTAINER WITH `:rw` because the live container mounts /app/config
+#     read-only.
 docker run --rm \
   -v /mnt/user/appdata/ductile/config:/app/config:rw \
   ductile-ductile:latest \
   /app/ductile config lock --config-dir /app/config
 
-docker restart ductile
+# (c) Apply the new env + restart with the new image.
+cd /mnt/user/appdata/ductile && docker compose up -d
 
-# Verify the new plugin loaded
-curl -s -H "Authorization: Bearer Ductilian" \
-  http://192.168.20.4:8888/plugins | jq '.[] | select(.name=="astro_rebuild_prod")'
+# (d) Verify the new plugin loaded.
+curl -s -H "Authorization: Bearer <YOUR_API_TOKEN>" \
+  http://<unraid>:8888/plugins | jq '.[] | select(.name=="astro_rebuild_prod")'
 ```
+
+> If you ALSO needed to enable the webhook listener for the first time
+> (no other webhooks in `webhooks.yaml`), make sure `webhooks.yaml` is in
+> the `include:` list of `config.yaml`, AND that `config.yaml` has a
+> `webhooks: { listen: "0.0.0.0:8091" }` block. Missing either of those is
+> a common first-time trap — see "Failure modes" below.
 
 ---
 
@@ -225,6 +259,9 @@ to see what broke.
 | Job exits with "Cannot connect to the Docker daemon" | Docker socket mount missing/wrong | Verify `/var/run/docker.sock:/var/run/docker.sock` is mounted in ductile's compose. |
 | Job hangs and is killed at 300s | Build genuinely takes longer than the timeout | Bump `timeout_seconds` and `timeout` in plugins.yaml. Astro builds the whole site every time; if it ever exceeds 5min, that's a content-volume signal. |
 | Two webhooks fire within seconds, second job fails or produces a corrupt build | Concurrent docker compose runs racing | `parallelism: 1` in plugins.yaml (above) serializes. Verify it's set; the schema default is also 1 but be explicit. |
+| `config lock` fails with "read-only file system" | You ran it inside the live ductile container (`/app/config` is mounted `:ro` there). | Use the one-shot rw container form shown in step 5(b) above. This is the single most common first-time trap on this stack. |
+| Webhook listener not reachable at all (connection refused on 8091) | Webhook listener wasn't enabled in `config.yaml`, OR `webhooks.yaml` is missing from `config.yaml` `include:` list. | Add a `webhooks: { listen: "0.0.0.0:8091" }` block to `config.yaml`, AND add `webhooks.yaml` to its `include:` list, then refresh lock + bring up. |
+| `Cannot connect to docker daemon` inside the plugin job (`exit_code` 1, stderr says socket missing) | `/var/run/docker.sock` mount is missing from ductile's `docker-compose.yml`. | Add `- /var/run/docker.sock:/var/run/docker.sock` under `volumes:`, then `docker compose up -d`. |
 
 ---
 
