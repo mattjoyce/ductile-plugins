@@ -260,12 +260,16 @@ def get_js_runtime_args(config: Dict[str, Any]) -> List[str]:
     if runtime_path:
         name = os.path.basename(runtime_path).split(".")[0]
         return ["--js-runtimes", f"{name}:{runtime_path}"]
-    # Auto-detect node or bun from PATH
-    for runtime in ("node", "bun"):
-        path = shutil_which(runtime)
-        if path:
-            return ["--js-runtimes", f"{runtime}:{path}"]
-    return []
+    # Enable every JS runtime we can find. Pass the bare name only —
+    # the "name:path" form is silently ignored by current yt-dlp versions
+    # and extraction falls back to no runtime, which fails for all videos.
+    # bun goes first because system node is often too old (yt-dlp rejects
+    # node < 20 as unsupported); yt-dlp will pick whichever is usable.
+    args: List[str] = []
+    for runtime in ("bun", "node"):
+        if shutil_which(runtime):
+            args.extend(["--js-runtimes", runtime])
+    return args
 
 
 def fetch_transcript_via_ytdlp(video_id: str, language: str, timeout: int, config: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str]:
