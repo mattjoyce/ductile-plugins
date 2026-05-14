@@ -1,0 +1,39 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: firecrawl
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Scrapes URLs via the Firecrawl API and writes clean markdown to a caller-specified output directory."
+concurrency_safe: true
+commands:
+  - name: handle
+    type: write
+    description: "Scrape a URL; atomically write <doc_id>.md and <doc_id>.json sidecar to output_dir."
+    idempotent: false
+    retry_safe: true
+    input_schema:
+      url: string
+      doc_id: string
+      output_dir: string
+    values:
+      consume:
+        - payload.url
+        - payload.doc_id
+        - payload.output_dir
+      emit:
+        - event: content_ready
+          values:
+            - payload.url
+            - payload.doc_id
+            - payload.output_path
+            - payload.content_hash
+            - payload.duration_seconds
+  - name: health
+    type: read
+    description: "Returns plugin health status; verifies firecrawl_api_key is configured."
+    idempotent: true
+    retry_safe: true
+config_keys:
+  required: [firecrawl_api_key]
+  optional: [api_base_url, timeout_seconds]
