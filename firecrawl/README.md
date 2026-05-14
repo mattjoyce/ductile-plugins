@@ -16,7 +16,7 @@ The plugin still emits a `content_ready` event so it participates in ductile's o
 
 ## Commands
 
-- `scrape` (write): Given `{url, doc_id, output_dir}` in the event payload, scrape the URL via Firecrawl and write `<doc_id>.md` plus `<doc_id>.json` sidecar to `output_dir` atomically. Emits `content_ready`.
+- `handle` (write): Given `{url, doc_id, output_dir}` in the event payload, scrape the URL via Firecrawl and write `<doc_id>.md` plus `<doc_id>.json` sidecar to `output_dir` atomically. Emits `content_ready`. (Named `handle` per ductile protocol v2 — the gateway only populates `event` for that command name.)
 - `health` (read): Returns health status; fails if `firecrawl_api_key` is not configured.
 
 ## Configuration
@@ -111,7 +111,7 @@ plugins:
 Then trigger via the gateway API:
 
 ```bash
-curl -X POST http://<HOST>:<PORT>/plugin/firecrawl/scrape \
+curl -X POST http://<HOST>:<PORT>/plugin/firecrawl/handle \
   -H "Authorization: Bearer <TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"payload": {"url": "https://example.com", "doc_id": "abc123", "output_dir": "/path/to/output"}}'
@@ -121,7 +121,7 @@ curl -X POST http://<HOST>:<PORT>/plugin/firecrawl/scrape \
 
 ```bash
 echo '{
-  "command": "scrape",
+  "command": "handle",
   "config": {"firecrawl_api_key": "<YOUR_KEY>"},
   "event": {"payload": {"url": "https://example.com", "doc_id": "test1", "output_dir": "/tmp"}}
 }' | python3 run.py

@@ -7,7 +7,7 @@ entrypoint: run.py
 description: "Scrapes URLs via the Firecrawl API and writes clean markdown to a caller-specified output directory."
 concurrency_safe: true
 commands:
-  - name: scrape
+  - name: handle
     type: write
     description: "Scrape a URL; atomically write <doc_id>.md and <doc_id>.json sidecar to output_dir."
     idempotent: false

@@ -36,7 +36,7 @@ class TestScrapeValidation(unittest.TestCase):
     def _scrape(self, payload: dict, config: dict | None = None) -> dict:
         return handle_request(
             {
-                "command": "scrape",
+                "command": "handle",
                 "config": config or {"firecrawl_api_key": "fc-x"},
                 "event": {"payload": payload},
             }
@@ -102,7 +102,7 @@ class TestScrapeHappyPath(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             resp = handle_request(
                 {
-                    "command": "scrape",
+                    "command": "handle",
                     "config": {"firecrawl_api_key": "fc-x"},
                     "event": {
                         "payload": {
@@ -150,7 +150,7 @@ class TestScrapeErrorMapping(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             resp = handle_request(
                 {
-                    "command": "scrape",
+                    "command": "handle",
                     "config": {"firecrawl_api_key": "fc-x"},
                     "event": {
                         "payload": {
@@ -175,7 +175,7 @@ class TestScrapeErrorMapping(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             resp = handle_request(
                 {
-                    "command": "scrape",
+                    "command": "handle",
                     "config": {"firecrawl_api_key": "fc-x"},
                     "event": {
                         "payload": {
@@ -194,7 +194,7 @@ class TestScrapeErrorMapping(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             resp = handle_request(
                 {
-                    "command": "scrape",
+                    "command": "handle",
                     "config": {"firecrawl_api_key": "fc-x"},
                     "event": {
                         "payload": {

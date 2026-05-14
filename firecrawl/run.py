@@ -297,7 +297,7 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
 
     if command == "health":
         return handle_health(config)
-    if command == "scrape":
+    if command == "handle":
         return handle_scrape(config, event)
     return error_response(
         f"unknown command: {command}",
