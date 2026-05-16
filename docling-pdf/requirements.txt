@@ -1,0 +1,8 @@
+# docling-pdf plugin runtime dependencies.
+#
+# docling pulls a large transitive tree (torch, transformers, layout
+# models). On the unraid box it can use the RTX 2070 if a CUDA torch
+# wheel is installed; the CPU wheel works too, just slower.
+docling>=2.0.0
+google-genai>=0.3.0
+anthropic>=0.39.0

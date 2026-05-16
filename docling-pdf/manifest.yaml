@@ -1,0 +1,46 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: docling-pdf
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Converts a PDF to Markdown via IBM docling, then polishes the output with a cloud LLM (Gemini or Claude) for tables, heading structure, and footnotes/references. Atomically writes <doc_id>.md and <doc_id>.json sidecar to a caller-specified output directory. Replaces the marker plugin."
+concurrency_safe: true
+commands:
+  - name: handle
+    type: write
+    description: "Parse a PDF with docling, polish with the configured LLM, then atomically write <doc_id>.md and <doc_id>.json sidecar to output_dir. Reads `source` (abs path to the PDF), `doc_id` (filename stem; no path separators), `output_dir` (existing writable dir). The .md lands LAST under an atomic-write contract so a filewatch on *.md is the completion signal."
+    idempotent: false
+    retry_safe: true
+    input_schema:
+      source: string
+      doc_id: string
+      output_dir: string
+    values:
+      consume:
+        - payload.source
+        - payload.doc_id
+        - payload.output_dir
+      emit:
+        - event: content_ready
+          values:
+            - payload.doc_id
+            - payload.output_path
+            - payload.page_count
+            - payload.parse_duration_seconds
+            - payload.polish_duration_seconds
+  - name: health
+    type: read
+    description: "Returns plugin health; verifies docling is importable and the configured LLM provider's API key is present."
+    idempotent: true
+    retry_safe: true
+config_keys:
+  required: []
+  optional:
+    - llm_provider          # "gemini" (default) | "claude" | "none" (parse-only, skip polish)
+    - gemini_api_key        # required when llm_provider == gemini
+    - gemini_model          # default: gemini-2.5-pro
+    - anthropic_api_key     # required when llm_provider == claude
+    - anthropic_model       # default: claude-sonnet-4-6
+    - polish_temperature    # default: 0.0
+    - llm_timeout_seconds   # default: 120
