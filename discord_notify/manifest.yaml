@@ -48,5 +48,5 @@ commands:
     idempotent: true
     retry_safe: true
 config_keys:
-  required: []
-  optional: [webhook_url, default_username, default_avatar_url, poll_message]
+  required: [webhook_url]
+  optional: [default_username, default_avatar_url, poll_message]
