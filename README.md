@@ -24,7 +24,7 @@ Each directory is a self-contained plugin implementing the Ductile plugin protoc
 ## Plugin structure
 
 Each plugin contains:
-- `manifest.yaml` — plugin metadata and command definitions (see `plugin-manifest.schema.json`)
+- `manifest.yaml` — plugin metadata and command definitions (see the canonical [plugin-manifest.schema.json](https://github.com/mattjoyce/ductile/blob/main/schemas/plugin-manifest.schema.json) in the main ductile repo)
 - `run.py` / `run.sh` / `run.ts` — entrypoint script
 - `README.md` — usage and configuration
 
