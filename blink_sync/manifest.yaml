@@ -5,6 +5,7 @@ version: 0.1.0
 protocol: 2
 entrypoint: run.sh
 description: "Download new motion clips from Blink local storage via Docker"
+concurrency_safe: false
 commands:
   - name: poll
     type: write

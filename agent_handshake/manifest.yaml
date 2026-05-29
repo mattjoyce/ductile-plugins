@@ -5,6 +5,7 @@ version: 0.1.0
 protocol: 2
 entrypoint: run.py
 description: "Challenge-response barrier for autonomous agents. Validates SHA256 proof-of-work and logs agent identity. Use as an alias with instance-specific challenge/salt config."
+concurrency_safe: false
 commands:
   - name: handle
     type: write

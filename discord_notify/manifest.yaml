@@ -5,6 +5,7 @@ version: 0.1.0
 protocol: 2
 entrypoint: run.py
 description: "Send a message to a Discord channel via incoming webhook"
+concurrency_safe: true
 commands:
   - name: handle
     type: write

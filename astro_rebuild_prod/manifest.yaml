@@ -10,6 +10,7 @@ version: 0.1.0
 protocol: 2
 entrypoint: run.py
 description: "Rebuild and restart the production Astro site (mattjoyce.ai) via Docker Compose. Triggered by an HMAC-signed webhook."
+concurrency_safe: false
 commands:
   - name: handle
     type: write
