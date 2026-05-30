@@ -1,25 +1,73 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: blink_sync
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.sh
-description: "Download new motion clips from Blink local storage via Docker"
 concurrency_safe: false
+description: "Pulls new motion clips from Blink local-storage by spawning a `blink-sync` sidecar Docker container via the host Docker socket. Stateful sink — the sidecar writes downloaded clips to media_dir and a downloaded-clips ledger to data_dir, so concurrent runs would race on both. Pair with `parallelism: 1` in plugins.yaml. Each poll is one short-lived container; no event emission, no durable facts in ductile state."
 commands:
   - name: poll
     type: write
-    description: "Spawn blink-sync container and download new clips to media dir."
+    description: "Spawn the blink-sync container against the configured data and media directories. Container reads new clips from Blink, writes them under media_dir, and updates its own state ledger under data_dir. On success, returns the container's stdout as result; on non-zero exit, returns the captured stderr."
     idempotent: false
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+          description: "Plugin envelope status."
+        result:
+          type: string
+          description: "Present on ok — captured stdout from the sidecar container."
+        error:
+          type: string
+          description: "Present on error — captured stderr / docker run failure output."
+        retry:
+          type: boolean
+          description: "Present on error — always false (treat sidecar failures as caller-investigable, not transient)."
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume: []
       emit: []
   - name: health
     type: read
-    description: "Check that the blink-sync Docker image is present on the host."
+    description: "Verify that the blink-sync Docker image is present on the host. Does not spawn a container — only inspects the image. Run `docker pull` or local build separately if missing."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'blink-sync image <image> is present'."
+        error:
+          type: string
+          description: "Present on error — image not found, build hint included."
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 config_keys:
   required: []
-  optional: [data_dir, media_dir, delay, image]
+  optional:
+    - data_dir
+    - media_dir
+    - delay
+    - image
