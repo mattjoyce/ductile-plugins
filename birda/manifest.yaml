@@ -1,29 +1,100 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: birda
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Run birda GPU-accelerated BirdNET bird detection on a WAV file via Docker. Accepts a native Unraid path, returns detections and performance metrics."
 concurrency_safe: false
+description: "Run GPU-accelerated BirdNET bird detection on a WAV file by spawning the birda sidecar container with --gpus all. Returns the per-detection list, audio duration, and realtime factor. Stateless transformer — does not write durable facts, does not emit events. Serial-only (concurrent invocations would contend for the same GPU); pair with `parallelism: 1` in plugins.yaml. Output table is written next to the input WAV (<wav>.BirdNET.selection.table.txt)."
 commands:
   - name: handle
     type: write
-    description: "Analyze a WAV file for bird species using birda (BirdNET v24, ONNX/CUDA). Returns output_path, detections, duration_s, realtime_factor."
+    description: "Analyze one WAV via birda (BirdNET v24, ONNX/CUDA). Spawns docker run --rm --gpus all -v /mnt/user:/mnt/user birda ... and parses the resulting Raven selection table for detections. Captures duration_s and realtime_factor from birda's pipeline_completed ndjson event. Timeout 300s (birda is GPU-bound; expect >300x realtime, so 300s comfortably covers an hour of audio)."
     idempotent: false
     retry_safe: false
     input_schema:
-      wav_path: string
-      lat: number
-      lon: number
-      min_conf: number
-      week: integer
+      type: object
+      properties:
+        wav_path:
+          type: string
+          description: "Absolute host path to the WAV file. Must be under /mnt/user/... so the bind-mount inside the birda container resolves."
+        lat:
+          type: number
+          description: "Latitude for the BirdNET range filter. Required."
+        lon:
+          type: number
+          description: "Longitude for the BirdNET range filter. Required."
+        min_conf:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: "Minimum detection confidence (0-1). Defaults to config.default_min_conf, then to 0.7."
+        week:
+          type: integer
+          minimum: -1
+          maximum: 48
+          description: "Week number 1-48 for seasonal range filtering. -1 disables the week filter. Optional."
+      required: [wav_path, lat, lon]
+      additionalProperties: false
     output_schema:
-      output_path: string
-      detections: array
-      duration_s: number
-      realtime_factor: number
-      detection_count: integer
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+          description: "Plugin envelope status."
+        result:
+          type: string
+          description: "Present on ok — summary line: '<n> detections in <file> — <dur>s audio, <rtf>x realtime'."
+        error:
+          type: string
+          description: "Present on error — missing field, docker failure, birda exit non-zero, or timeout."
+        retry:
+          type: boolean
+          description: "Present on error — true only for transient timeouts; false for missing-field, docker-missing, and birda exit-code errors."
+        output_path:
+          type: string
+          description: "Present on ok — absolute path to the Raven selection table written next to the input WAV."
+        detections:
+          type: array
+          description: "Present on ok — list of detections above the confidence threshold, sorted by start_s ascending."
+          items:
+            type: object
+            properties:
+              start_s:
+                type: number
+                description: "Detection start time in seconds."
+              end_s:
+                type: number
+                description: "Detection end time in seconds."
+              scientific_name:
+                type: string
+                description: "Latin binomial."
+              common_name:
+                type: string
+                description: "English common name."
+              confidence:
+                type: number
+                description: "Detection confidence 0-1."
+            required: [start_s, end_s, scientific_name, common_name, confidence]
+            additionalProperties: false
+        duration_s:
+          type: [number, "null"]
+          description: "Present on ok — audio duration in seconds (parsed from birda's pipeline_completed event); null if not derivable."
+        realtime_factor:
+          type: [number, "null"]
+          description: "Present on ok — realtime processing factor (e.g. 379.5); null if not derivable."
+        detection_count:
+          type: integer
+          minimum: 0
+          description: "Present on ok — length of the detections array (convenience field)."
+        logs:
+          type: array
+          items:
+            type: object
+          description: "Always present — info on success, error on failure."
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.wav_path
@@ -34,13 +105,35 @@ commands:
       emit: []
   - name: health
     type: read
-    description: "Check docker binary is accessible and birda image exists."
+    description: "Verify the docker binary is callable and the birda image is built locally. Does not invoke the GPU or spawn a container."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'docker <version> available; birda image present'."
+        error:
+          type: string
+          description: "Present on error — docker missing or birda image not built."
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
+    values:
+      consume: []
+      emit: []
 config_keys:
   required: []
   optional:
     - docker_bin
     - default_min_conf
-    - vram_min_free_mb
-    - vram_wait_timeout_s
