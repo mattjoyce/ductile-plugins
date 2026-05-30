@@ -6,17 +6,49 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: astro_rebuild_prod
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Rebuild and restart the production Astro site (mattjoyce.ai) via Docker Compose. Triggered by an HMAC-signed webhook."
 concurrency_safe: false
+description: "Rebuild and restart the production Astro site (mattjoyce.ai) via Docker Compose. Generic sys_exec clone — runs the operator-configured command and emits a mattjoyce.publish.completed event with exit metadata. Webhook payload is trigger-only: payload values are surfaced as DUCTILE_PAYLOAD_<KEY> env vars, never spliced into command text (defense against shell injection from the public webhook surface). Serial-only — pair with `parallelism: 1` in plugins.yaml because docker compose build is not safe to run concurrently against the same project."
 commands:
   - name: handle
     type: write
-    description: "Run the operator-configured docker compose rebuild and emit a completion event. Payload is trigger-only — never spliced into the command."
+    description: "Run the operator-configured command in a subprocess. Captures stdout/stderr (truncated to stdout_max_bytes/stderr_max_bytes), times out at config.timeout_seconds, and emits a completion event with exit_code, duration_ms, and output. Payload is exposed only as env vars; never interpolated. Exit codes listed in config.retry_on_exit_codes mark the response as retry-eligible."
     idempotent: false
     retry_safe: true
+    input_schema:
+      type: object
+      description: "Webhook trigger payload — opaque to the command (surfaced only as DUCTILE_PAYLOAD_<KEY> env vars). Any extra fields are accepted and forwarded."
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+          description: "Plugin envelope status."
+        result:
+          type: string
+          description: "Present on ok — 'command exited with code <n> in <ms>ms'."
+        error:
+          type: string
+          description: "Present on error — stderr text or 'command timed out after <s>s' / 'command failed with exit code <n>'."
+        retry:
+          type: boolean
+          description: "Present on error — true only when the exit code matches config.retry_on_exit_codes; transient timeouts are never retried."
+        events:
+          type: array
+          description: "Present when config.emit_event=true (default) — single completion event of type config.event_type."
+          items:
+            type: object
+        logs:
+          type: array
+          items:
+            type: object
+          description: "Always present — info/error/debug entries for the command, plus stdout/stderr previews when present."
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.*
@@ -34,9 +66,30 @@ commands:
             - payload.executed_at
   - name: health
     type: read
-    description: "Validate command and runtime prerequisites."
+    description: "Validate the configured command is well-formed: config.command is set, the executable resolves via PATH, and config.working_dir (if set) is an existing directory. Does not actually run the command."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'sys_exec health check passed'."
+        error:
+          type: string
+          description: "Present on error — missing command, executable-not-in-PATH, or invalid working_dir."
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 config_keys:
   required: [command]
   optional:
