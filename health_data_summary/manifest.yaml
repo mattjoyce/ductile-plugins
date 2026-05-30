@@ -1,18 +1,82 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: health_data_summary
-version: 0.2.0
+version: 0.3.0
 protocol: 2
 entrypoint: run.sh
-description: "Join Garmin + Withings DBs into a unified daily_health_summary row per dirty day. Delegates execution to the ductile-healthdata Docker image; this plugin is a thin wrapper that invokes `docker run --rm -i ductile-healthdata:latest`."
 concurrency_safe: false
-
+description: "Stateful ETL that joins Garmin and Withings source DBs into a unified daily_health_summary row per dirty day. This manifest covers the thin run.sh wrapper that pipes the ductile request through `docker run --rm -i ductile-healthdata:latest`; the actual ETL lives in the healthdata image's healthdata_etl/run.py (source: github.com/mattjoyce/ductile-healthdata). Volume contract: host_healthdata_dir is bind-mounted at container_healthdata_dir (default /app/data/healthdata) so config.*_db paths resolve identically on both sides. Serial-only — concurrent invocations would race on summary writes; pair with `parallelism: 1` in plugins.yaml."
 commands:
   - name: handle
     type: write
-    description: "Event-dispatcher entry point. Routes by event.type: health.new_data triggers ETL of dirty_periods (Garmin or Withings) into healthdata.db. Emits healthdata.etl.completed."
+    description: "Event-router for health.new_data. Reads event.payload.source ('garmin' or 'withings') and dirty_periods (list of date strings); runs source-specific ETL (garmin_etl / withings_etl), inserts into healthdata.db summaries+metrics tables, and emits a healthdata.etl.completed summary. state_updates snapshots the post-ETL row counts and source watermarks — see fact_outputs."
     idempotent: true
     retry_safe: true
+    input_schema:
+      type: object
+      properties:
+        source:
+          type: string
+          enum: [garmin, withings]
+          description: "Which source DB to ETL. Set by the upstream poller (garmin or withings plugin)."
+        dirty_periods:
+          type: array
+          description: "List of date strings (YYYY-MM-DD) representing days that need re-summarising. For withings, an empty list triggers watermark mode."
+          items:
+            type: string
+        detected_at:
+          type: string
+          description: "ISO timestamp set by the upstream poller. Carried through for log correlation."
+      required: [source]
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — '<source> ETL: <n> periods, <m> metrics written'."
+        error:
+          type: string
+          description: "Present on error — unhandled event type, source-DB exception, or healthdata image missing."
+        retry:
+          type: boolean
+          description: "Present on error — true for ETL exceptions (transient DB or IO issues); false for unhandled event_type and missing-image errors."
+        events:
+          type: array
+          description: "Present on ok — single healthdata.etl.completed event."
+          items:
+            type: object
+        state_updates:
+          type: object
+          description: "Present on ok — post-ETL snapshot of healthdata.db row counts and source watermarks. Snapshotted as a health_data_summary.snapshot fact (see fact_outputs)."
+          properties:
+            summary_count:
+              type: integer
+              minimum: 0
+              description: "Row count in healthdata.summaries."
+            metric_count:
+              type: integer
+              minimum: 0
+              description: "Row count in healthdata.metrics."
+            pending_updates_total:
+              type: integer
+              minimum: 0
+              description: "Rows in source_updates with needs_update=1."
+            latest_garmin_source_day:
+              type: [string, "null"]
+              description: "MAX(day) from garmin_summary.days_summary. Null when garmin DB missing."
+            latest_withings_source_date:
+              type: [string, "null"]
+              description: "MAX(date) from withings.measurements. Null when withings DB missing."
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.source
@@ -25,30 +89,48 @@ commands:
             - payload.periods_processed
             - payload.metrics_written
             - payload.result
-
   - name: health
     type: read
-    description: "Probe both source DBs and the summary.db; verify the healthdata Docker image is available. Emits no state_updates."
+    description: "Probe healthdata.db readability and surface the configured source-DB sync status + pending update counts. Emits a healthdata_etl.health event with the diagnostic payload so the stats are inspectable via job logs without writing to plugin_facts (no state_updates per PLUGIN_DEVELOPMENT.md §5)."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          description: "Always ok — health probe never returns error status; degradation surfaces via result and event payload."
+        result:
+          type: string
+          description: "Either 'healthdata.db not yet initialised' or a summary of the sync_status rows."
+        events:
+          type: array
+          description: "Single healthdata_etl.health event with the diagnostic payload."
+          items:
+            type: object
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, events, logs]
+      additionalProperties: false
     values:
       consume: []
       emit:
-        - event: health_data_summary.health
+        - event: healthdata_etl.health
           values:
-            - payload.garmin_db
-            - payload.withings_db
-            - payload.summary_db
-            - payload.image
+            - payload.healthdata_db
+            - payload.sources
+            - payload.pending_updates
             - payload.checked_at
-
 fact_outputs:
   - when:
       command: handle
     from: state_updates
     fact_type: health_data_summary.snapshot
     compatibility_view: mirror_object
-
 config_keys:
   required:
     - healthdata_db
