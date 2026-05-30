@@ -1,23 +1,67 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: agent_handshake
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Challenge-response barrier for autonomous agents. Validates SHA256 proof-of-work and logs agent identity. Use as an alias with instance-specific challenge/salt config."
 concurrency_safe: false
+description: "Challenge-response barrier for autonomous agents. Validates a SHA256(challenge + salt) proof-of-work submitted by an agent and emits an agent_handshake.registered event so downstream pipelines (typically discord_notify) can announce the registration. Append-writes to an optional log file. Designed to be used via plugin aliasing — one instance per challenge/salt pair (e.g. ap_canary on B450 prod)."
 commands:
   - name: handle
     type: write
-    description: "Validate agent proof-of-work. Expects payload: email, challenge, proof, consent, agent."
+    description: "Verify the submitted proof and register the agent. Payload must include email (identity), challenge (must match config.challenge), proof (must equal SHA256(challenge + salt)), and consent: true. agent is optional and defaults to 'unknown'. On success: appends to config.log_path if set, emits agent_handshake.registered, and updates the running registration counter (state_updates)."
     idempotent: false
     retry_safe: false
     input_schema:
-      email: string
-      challenge: string
-      proof: string
-      consent: boolean
-      agent: string
+      type: object
+      properties:
+        email:
+          type: string
+          description: "Agent identity. Required, non-empty."
+        challenge:
+          type: string
+          description: "Echo of the challenge string published to agents. Must match config.challenge exactly."
+        proof:
+          type: string
+          description: "Hex SHA256 of (challenge + salt). Must match the server-side computed proof."
+        consent:
+          type: boolean
+          description: "Must be true. Any other value (false, missing, null) rejects the handshake."
+        agent:
+          type: string
+          description: "Optional agent self-identifier (e.g. 'claude-opus-4-7'). Defaults to 'unknown'."
+      required: [email, challenge, proof, consent]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+          description: "Plugin envelope status."
+        result:
+          type: string
+          description: "Present on ok — 'Agent registered: <email> (agent: <agent>)'."
+        error:
+          type: string
+          description: "Present on error — human-readable failure reason (misconfig, missing field, proof mismatch)."
+        retry:
+          type: boolean
+          description: "Present on error — always false (every failure is caller-driven, not transient)."
+        events:
+          type: array
+          description: "Present on ok — single agent_handshake.registered event."
+          items:
+            type: object
+        state_updates:
+          type: object
+          description: "Present on ok — { last_registration, total_registrations }. Recorded as the running registration tally."
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.email
@@ -36,9 +80,31 @@ commands:
             - payload.text
   - name: health
     type: read
-    description: "Verify plugin is configured with challenge and salt."
+    description: "Verify the instance is configured with both challenge and salt. Does not validate that the configured proof would succeed — only that the required config keys are present and non-empty."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — confirms challenge is configured."
+        error:
+          type: string
+          description: "Present on error — config.challenge or config.salt missing."
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 config_keys:
   required: [challenge, salt]
-  optional: [log_path, notify_plugin]
+  optional:
+    - log_path
