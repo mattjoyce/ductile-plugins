@@ -1,0 +1,26 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: docling-pdf
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Convert a PDF to Markdown via the ductile-docling HTTP worker. Synchronous: POSTs {input_path, output_path} to the satellite's /convert endpoint and blocks until the .md is written. Replaces the marker plugin in the Parsem ingest pipeline."
+concurrency_safe: true
+commands:
+  - name: handle
+    type: write
+    description: "POST to the docling satellite to convert one PDF. Reads `source_path` (input PDF) and `doc_id` (used to derive the output filename when `output_path` is not given). Optional `output_path` overrides the derived target. All paths are absolute and must be visible to the satellite container."
+    idempotent: false
+    retry_safe: true
+    input_schema:
+      source_path: string
+      doc_id: string
+      output_path: string
+  - name: health
+    type: read
+    description: "GET the satellite's /healthz to verify it is up and docling loaded."
+    idempotent: true
+    retry_safe: true
+config_keys:
+  required: [satellite_url]
+  optional: [output_dir, request_timeout]
