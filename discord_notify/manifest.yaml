@@ -1,22 +1,59 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: discord_notify
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Send a message to a Discord channel via incoming webhook"
 concurrency_safe: true
+description: "Posts messages to a Discord channel via incoming webhook. Stateless writer — every invocation is an independent POST with no shared state, so the gateway may dispatch in parallel. Reads message body from payload (message / content / title), with fallbacks to a config-level message_template (dot-notation substitution against payload) or default_message. Caps output at Discord's 2000-char limit and prepends an optional bold title."
 commands:
   - name: handle
     type: write
-    description: "Post a message to Discord. Reads 'message' or 'content' from payload."
+    description: "Post a message to Discord. Resolves the body in order: payload.message → payload.content → config.message_template rendered against payload → config.default_message → payload.result. Optional payload.title is prepended in bold; payload.username overrides config.default_username for this send."
     idempotent: false
     retry_safe: false
     input_schema:
-      message: string
-      content: string
-      title: string
-      username: string
+      type: object
+      properties:
+        message:
+          type: string
+          description: "Primary body. Tried first."
+        content:
+          type: string
+          description: "Alias for message; tried second."
+        title:
+          type: string
+          description: "Optional bold title prepended to the body."
+        username:
+          type: string
+          description: "Override webhook username for this send."
+        result:
+          type: string
+          description: "Pipeline result string — last-resort fallback if no other body is supplied."
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+          description: "Plugin envelope status."
+        result:
+          type: string
+          description: "Present on ok — short preview of the notified text (<=80 chars)."
+        error:
+          type: string
+          description: "Present on error — human-readable failure reason."
+        retry:
+          type: boolean
+          description: "Present on error — true for transient errors (HTTP 5xx, network)."
+        logs:
+          type: array
+          items:
+            type: object
+          description: "Structured log entries (level + message)."
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.message
@@ -27,27 +64,78 @@ commands:
       emit: []
   - name: poll
     type: write
-    description: "Schedulable alias for handle. Post a message to Discord via a scheduled trigger."
+    description: "Scheduled variant of handle. Resolves body from config.poll_message when the dispatcher supplies no payload (scheduled invocations have no caller payload). Otherwise identical to handle."
     idempotent: false
     retry_safe: false
     input_schema:
-      message: string
-      content: string
-      title: string
-      username: string
+      type: object
+      properties:
+        message:
+          type: string
+          description: "Primary body. Tried first."
+        content:
+          type: string
+          description: "Alias for message; tried second."
+        title:
+          type: string
+          description: "Optional bold title prepended to the body."
+        username:
+          type: string
+          description: "Override webhook username for this send."
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+        error:
+          type: string
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.message
         - payload.content
         - payload.title
         - payload.username
-        - payload.result
       emit: []
   - name: health
     type: read
-    description: "Verify webhook URL is configured and reachable."
+    description: "Validate webhook_url is configured and looks like a Discord webhook URL. Does not actually post to the webhook."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+        error:
+          type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 config_keys:
   required: [webhook_url]
-  optional: [default_username, default_avatar_url, poll_message]
+  optional:
+    - default_username
+    - default_avatar_url
+    - default_message
+    - message_template
+    - poll_message
+    - request_timeout_seconds
