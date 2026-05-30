@@ -1,17 +1,64 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: birdnet_firstday
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
 concurrency_safe: false
-description: "Polls birdnet-go SQLite detections DB and emits one event per species the first time it is detected each calendar day (local timezone). Common names resolved via birdnet-go range/species API."
+description: "Polls the birdnet-go SQLite detections DB and emits one event per species the first time it is detected each calendar day (system local timezone). The watermark (highest seen detection id) is the durable identity — once a species has fired today, it does not fire again until tomorrow's local midnight resets the per-day MIN(id) query. Common names are resolved via the birdnet-go range/species/list API and cached in plugin state to avoid hammering on every poll. Stateful poller — declares fact_outputs so the gateway snapshots watermark, last_polled_at, and the species cache as durable plugin_facts rows."
 commands:
   - name: poll
     type: write
-    description: "Scan today's detections; emit an event per species whose first-of-day detection id exceeds the watermark."
+    description: "Scan today's detections (DATE(detected_at, 'unixepoch', 'localtime') = DATE('now','localtime')) and emit one birdnet.firstday_species event per species whose MIN(id) for the day exceeds the persisted watermark. Refreshes the common-name cache when stale (TTL = cache_ttl_seconds, default 1h). Returns events plus a state_updates snapshot of the new watermark + species cache."
     idempotent: false
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+          description: "Plugin envelope status."
+        result:
+          type: string
+          description: "Present on ok — '<n> new first-of-day species (watermark=<n>)'."
+        error:
+          type: string
+          description: "Present on error — db missing, db query failure, or config missing."
+        retry:
+          type: boolean
+          description: "Present on error — true for transient (db_path not found, db query failed); false for config errors."
+        events:
+          type: array
+          description: "Zero or more birdnet.firstday_species events (one per newly-first-of-day species). Empty array is the steady-state result on most polls."
+          items:
+            type: object
+        state_updates:
+          type: object
+          description: "Present on ok — { watermark, last_polled_at, species_cache?, species_cache_fetched_at? }. Snapshotted as a birdnet_firstday.snapshot fact (see fact_outputs)."
+          properties:
+            watermark:
+              type: integer
+              minimum: 0
+              description: "Highest detection id observed today. Resets implicitly each local midnight as today's MIN(id) advances."
+            last_polled_at:
+              type: string
+              description: "ISO timestamp of this poll (UTC)."
+            species_cache:
+              type: object
+              description: "{scientific_name: common_name} map. Present only when species_url is configured."
+              additionalProperties:
+                type: string
+            species_cache_fetched_at:
+              type: string
+              description: "ISO timestamp of the last successful species API fetch."
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, events, logs]
+      additionalProperties: false
     values:
       consume: []
       emit:
@@ -30,9 +77,36 @@ commands:
             - payload.message
   - name: health
     type: read
-    description: "Report db reachability, today's detection count, watermark."
+    description: "Report db reachability, today's total detection count, and the in-state watermark + species cache stats. Returns status: ok with result='ok' when reachable, status: ok with result='degraded' when not — does not bubble db-missing as a hard error so monitors can probe without false alerting."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          enum: [ok, degraded]
+          description: "'ok' when db reachable and queryable; 'degraded' otherwise."
+        error:
+          type: string
+        retry:
+          type: boolean
+        events:
+          type: array
+        logs:
+          type: array
+          items:
+            type: object
+          description: "Single info entry with a JSON-serialised stats block (db_exists, today_detection_count, query_error, watermark, species_cache_size, species_cache_fetched_at)."
+      required: [status, logs]
+      additionalProperties: false
+    values:
+      consume: []
+      emit: []
 fact_outputs:
   - when:
       command: poll
@@ -41,4 +115,8 @@ fact_outputs:
     compatibility_view: mirror_object
 config_keys:
   required: [db_path]
-  optional: [species_url, event_type, cache_ttl_seconds, http_timeout_seconds]
+  optional:
+    - species_url
+    - event_type
+    - cache_ttl_seconds
+    - http_timeout_seconds
