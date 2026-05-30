@@ -1,26 +1,108 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: docling-pdf
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Convert a PDF to Markdown via the ductile-docling HTTP worker. Synchronous: POSTs {input_path, output_path} to the satellite's /convert endpoint and blocks until the .md is written. Replaces the marker plugin in the Parsem ingest pipeline."
 concurrency_safe: true
+description: "Synchronous HTTP wrapper around the ductile-docling satellite for PDF → Markdown conversion. POSTs {input_path, output_path} to <satellite_url>/convert and blocks until the satellite responds 2xx or non-2xx. Per the satellite contract, the .md is written LAST under an atomic rename, so its presence on disk is the completion signal for downstream filewatchers (parsem_converted_watch). All paths are absolute and satellite-visible — the standard deploy binds the parsem_library named volume into the satellite at /library. Stateless on the gateway side: the satellite owns the heavy work, so concurrent invocations against different doc_ids are safe."
 commands:
   - name: handle
     type: write
-    description: "POST to the docling satellite to convert one PDF. Reads `source_path` (input PDF) and `doc_id` (used to derive the output filename when `output_path` is not given). Optional `output_path` overrides the derived target. All paths are absolute and must be visible to the satellite container."
-    idempotent: false
-    retry_safe: true
-    input_schema:
-      source_path: string
-      doc_id: string
-      output_path: string
-  - name: health
-    type: read
-    description: "GET the satellite's /healthz to verify it is up and docling loaded."
+    description: "Convert one PDF via the docling satellite. Prefers payload.source_path; falls back to payload.input_path. output_path is optional — when absent, derives <output_dir>/<doc_id>.md from doc_id (or input filename stem when doc_id is also missing). Returns once the satellite acknowledges; the .md write itself is the downstream signal."
     idempotent: true
     retry_safe: true
+    input_schema:
+      type: object
+      properties:
+        source_path:
+          type: string
+          description: "Absolute, satellite-visible path to the input PDF. Required (or input_path as alias)."
+        input_path:
+          type: string
+          description: "Alias for source_path. Used when source_path is absent."
+        output_path:
+          type: string
+          description: "Absolute target .md path. When absent, derived as <output_dir>/<doc_id>.md. Must end in .md."
+        doc_id:
+          type: string
+          description: "Document identifier. When absent, derived from the input filename stem. Used to build output_path and to key state_updates."
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+          description: "Plugin envelope status."
+        result:
+          type: string
+          description: "Present on ok — 'ready'."
+        error:
+          type: string
+          description: "Present on error — satellite HTTP response prefix, connection failure, or validation error."
+        retry:
+          type: boolean
+          description: "Present on error — true for transient errors (satellite 503, unreachable); false for validation errors and HTTP 400."
+        state_updates:
+          type: object
+          description: "Present on ok — { doc_id, state: 'ready', output_path, page_count, parse_duration_seconds, docling_version } as returned by the satellite."
+          properties:
+            doc_id:
+              type: string
+            state:
+              type: string
+              enum: [ready]
+            output_path:
+              type: string
+            page_count:
+              type: [integer, "null"]
+            parse_duration_seconds:
+              type: [number, "null"]
+            docling_version:
+              type: [string, "null"]
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
+    values:
+      consume:
+        - payload.source_path
+        - payload.input_path
+        - payload.output_path
+        - payload.doc_id
+      emit: []
+  - name: health
+    type: read
+    description: "GET the satellite's /healthz endpoint. Returns ok with result='healthy' on 2xx, ok with result='degraded' on non-2xx, missing config, or unreachable satellite. Never returns status='error' — degradation is reported in result so monitors can probe without false alerting."
+    idempotent: true
+    retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          description: "Always 'ok' — degradation is communicated via result, not status."
+        result:
+          type: string
+          enum: [healthy, degraded]
+          description: "'healthy' when satellite /healthz returns 2xx; 'degraded' otherwise (including config-missing and network failures)."
+        logs:
+          type: array
+          items:
+            type: object
+          description: "Info on healthy; warn or error with diagnostic on degraded."
+      required: [status, result, logs]
+      additionalProperties: false
+    values:
+      consume: []
+      emit: []
 config_keys:
   required: [satellite_url]
-  optional: [output_dir, request_timeout]
+  optional:
+    - output_dir
+    - request_timeout
