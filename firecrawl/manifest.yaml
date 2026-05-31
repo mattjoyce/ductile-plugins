@@ -1,21 +1,58 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: firecrawl
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Scrapes URLs via the Firecrawl API and writes clean markdown to a caller-specified output directory."
 concurrency_safe: true
+description: "Scrapes URLs via the Firecrawl API and writes clean markdown + a JSON sidecar to a caller-specified output_dir using atomic rename (write to .tmp, fsync, rename) so downstream filewatchers see complete files. Stateless transformer — no plugin-side durable state; the output files plus the emitted content_ready event are the artefacts. Safe to run in parallel against different doc_ids; the atomic-rename pattern protects against concurrent writes to the same file."
 commands:
   - name: handle
     type: write
-    description: "Scrape a URL; atomically write <doc_id>.md and <doc_id>.json sidecar to output_dir."
+    description: "Call the Firecrawl /v1/scrape endpoint for one URL. On 2xx, writes <output_dir>/<doc_id>.md plus <output_dir>/<doc_id>.json sidecar (containing url, final_url, status_code, content_hash, duration, title, description) via atomic rename, then emits content_ready with the path and content hash. HTTP 4xx is non-retryable (bad URL/auth); 5xx and transport errors are retryable. Bounded by config.timeout_seconds per API call."
     idempotent: false
     retry_safe: true
     input_schema:
-      url: string
-      doc_id: string
-      output_dir: string
+      type: object
+      properties:
+        url:
+          type: string
+          description: "Target URL to scrape. Required."
+        doc_id:
+          type: string
+          description: "Output filename stem. Required. <doc_id>.md and <doc_id>.json are written to output_dir."
+        output_dir:
+          type: string
+          description: "Absolute path to a writable directory where the .md and .json sidecar are written. Required and must exist + be writable."
+      required: [url, doc_id, output_dir]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+          description: "Plugin envelope status."
+        result:
+          type: string
+          description: "Present on ok — 'scraped <url> (<n> bytes, <s>s)'."
+        error:
+          type: string
+          description: "Present on error — missing field, output_dir not writable, firecrawl HTTP/transport/parse failure, or atomic-write failure."
+        retry:
+          type: boolean
+          description: "Present on error — true for 5xx, transport, and write failures; false for 4xx, structural, and config errors."
+        events:
+          type: array
+          description: "Present on ok — single content_ready event."
+          items:
+            type: object
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.url
@@ -31,9 +68,32 @@ commands:
             - payload.duration_seconds
   - name: health
     type: read
-    description: "Returns plugin health status; verifies firecrawl_api_key is configured."
+    description: "Verify firecrawl_api_key is configured. Does not call the Firecrawl API — avoids spending quota on every health probe."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'healthy'."
+        error:
+          type: string
+          description: "Present on error — 'firecrawl_api_key not configured'."
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 config_keys:
   required: [firecrawl_api_key]
-  optional: [api_base_url, timeout_seconds]
+  optional:
+    - api_base_url
+    - timeout_seconds
