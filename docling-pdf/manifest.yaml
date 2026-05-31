@@ -101,6 +101,12 @@ commands:
     values:
       consume: []
       emit: []
+fact_outputs:
+  - when:
+      command: handle
+    from: state_updates
+    fact_type: docling_pdf.conversion
+    compatibility_view: mirror_object
 config_keys:
   required: [satellite_url]
   optional:
