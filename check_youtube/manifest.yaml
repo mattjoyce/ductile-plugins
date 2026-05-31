@@ -1,29 +1,88 @@
+# check_youtube — instance-specific clone of plugins/switch.
+# run.py is byte-identical to switch's; the only difference between
+# clones is the manifest name (so a deploy can register multiple
+# instances each routing on its own field/checks pair). Keep in sync
+# with switch when the underlying plugin protocol changes.
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: check_youtube
-# Copy of plugins/switch (instance-specific manifest name). Keep in sync.
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Classify URL payloads to route YouTube vs web content."
+concurrency_safe: true
+description: "URL classifier — reads one configured field from the inbound event (config.field, dot-notation: 'payload.url' or 'context.source'), tests it against an ordered list of conditions (config.checks: regex / contains / startswith / endswith / equals), and emits the configured event_type of the first match with the inbound payload unchanged. Stateless pure transformer. Returns error if no check matches — pair with a default route in the pipeline if you need fallthrough behaviour."
 commands:
   - name: handle
     type: write
-    description: "Classify a URL as YouTube, web, or plain text and route it to the correct pipeline."
+    description: "Resolve the configured field path against the inbound event, evaluate config.checks in order, and emit the first match's event_type carrying the original payload. Preserves the inbound dedupe_key on the emitted event. Returns error if no check matches OR if a regex fails to compile at runtime."
     idempotent: true
     retry_safe: true
+    input_schema:
+      type: object
+      description: "Inbound event payload — opaque to the router. Routing is driven entirely by config.field + config.checks; payload is forwarded to the emitted event unchanged."
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+          description: "Plugin envelope status."
+        result:
+          type: string
+          description: "Present on ok — 'matched <cond_type> -> <emit>'."
+        error:
+          type: string
+          description: "Present on error — 'no checks matched and no default provided', invalid regex, or config validation failure."
+        retry:
+          type: boolean
+          description: "Present on error — always false (every error is structural)."
+        events:
+          type: array
+          description: "Present on ok — single routed event with the configured emit type and the inbound payload."
+          items:
+            type: object
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.*
       emit:
-        - event: "<configured check emit>"
+        - event: "<config.checks[].emit>"
           values:
             - payload.*
   - name: health
     type: read
-    description: "Validate plugin configuration."
+    description: "Validate config.field is set and config.checks is a non-empty list of well-formed checks. Does not evaluate any routes."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'config ok'."
+        error:
+          type: string
+          description: "Present on error — 'config.field is required', 'config.checks must be a non-empty list', or per-check parse error."
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 config_keys:
-  required: [field, checks]
+  required:
+    - field
+    - checks
   optional: []
