@@ -1,17 +1,51 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: jina-reader
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Scrapes web pages via Jina Reader API and returns clean markdown"
 concurrency_safe: false
+description: "Scrapes web pages via the Jina Reader API (r.jina.ai) and returns clean markdown. Two modes: poll (single configured URL, emits content_changed only when the content hash differs from the last snapshot — change-detection use case) and handle (event-driven, scrapes payload.url on demand, always emits content_ready — on-demand fetch use case). Stateful in poll mode (content_hash persisted via fact_outputs); stateless in handle mode."
 commands:
   - name: poll
     type: write
-    description: "Fetch the configured URL and emit a content_changed event if content has changed."
+    description: "Fetch config.url via Jina Reader. Compares the SHA256 of the returned markdown against state.content_hash; emits content_changed only when the hash differs (or on first run). Updates state with the new hash. No-op (no event, no state change) when content is unchanged — bounded by config.max_size (default 256KB; truncates beyond and reports truncated: true)."
     idempotent: false
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'changed (hash <prefix>)' or 'unchanged (hash <prefix>)'."
+        error:
+          type: string
+          description: "Present on error — config.url missing, jina fetch failed, parse error."
+        retry:
+          type: boolean
+        events:
+          type: array
+          description: "Present on ok when content changed — single content_changed event. Empty array when unchanged."
+          items:
+            type: object
+        state_updates:
+          type: object
+          description: "Present on ok (changed branch) — { content_hash, last_url }. Snapshotted as jina-reader.snapshot via fact_outputs."
+          properties:
+            content_hash:
+              type: string
+            last_url:
+              type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume: []
       emit:
@@ -23,11 +57,39 @@ commands:
             - payload.truncated
   - name: handle
     type: write
-    description: "Scrape content from a webpage and return clean markdown."
+    description: "On-demand variant. Scrapes payload.url (no state involvement) and always emits content_ready with the fetched markdown. Use when the caller wants a fresh fetch regardless of prior state — for instance from a manual API trigger or as a pipeline step."
     idempotent: true
     retry_safe: true
     input_schema:
-      url: string
+      type: object
+      properties:
+        url:
+          type: string
+          description: "URL to scrape. Required."
+      required: [url]
+      additionalProperties: false
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+        error:
+          type: string
+        retry:
+          type: boolean
+        events:
+          type: array
+          items:
+            type: object
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.url
@@ -40,9 +102,24 @@ commands:
             - payload.truncated
   - name: health
     type: read
-    description: "Returns plugin health status."
+    description: "Static health probe — returns ok without calling the Jina API (avoids spending quota on health checks)."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        result:
+          type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 fact_outputs:
   - when:
       command: poll
@@ -51,4 +128,7 @@ fact_outputs:
     compatibility_view: mirror_object
 config_keys:
   required: []
-  optional: [url, max_size, jina_api_key]
+  optional:
+    - url
+    - max_size
+    - jina_api_key
