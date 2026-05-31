@@ -1,17 +1,55 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: youtube_playlist
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Poll a YouTube playlist feed and emit new video events."
 concurrency_safe: false
+description: "Poll a YouTube playlist via yt-dlp and emit one youtube.playlist_item event per newly seen video. Stateful — declares fact_outputs so seen_ids and last_checked persist as youtube_playlist.snapshot facts. The seen_ids set is the durable identity: a video is announced once and never again. On the first run, config.emit_existing_on_first_run (default true) controls whether the back-catalogue is emitted or just recorded as already-seen. Capped per-poll by config.max_emit (default 5) and per-fetch by config.max_entries (default 50)."
 commands:
   - name: poll
     type: write
-    description: "Fetch playlist feed and emit new video events."
+    description: "Fetch the playlist via yt-dlp (timeout config.request_timeout_seconds, default 60), diff against state.seen_ids, and emit youtube.playlist_item for each new video. Builds output_path per event from config.output_dir + config.filename_template (default '{video_id}.md'). Includes a config.prompt_template-rendered prompt + config.transcript_language so a downstream youtube_transcript pipeline can pick the work up. Bounded by config.max_emit per poll. State_updates accumulates seen_ids (capped to prevent unbounded growth via merge_seen_ids)."
     idempotent: false
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'Emitted <n> new playlist items (total seen <total>)' or a no-op summary."
+        error:
+          type: string
+          description: "Present on error — missing playlist config, yt-dlp failure, parse error."
+        retry:
+          type: boolean
+        events:
+          type: array
+          description: "Zero or more youtube.playlist_item events. Empty on no-new-videos polls."
+          items:
+            type: object
+        state_updates:
+          type: object
+          description: "Present on ok — { seen_ids, last_checked }. Snapshotted as youtube_playlist.snapshot."
+          properties:
+            seen_ids:
+              type: array
+              items:
+                type: string
+              description: "Bounded list of video IDs already announced. merge_seen_ids caps the size."
+            last_checked:
+              type: string
+              description: "ISO timestamp of this poll."
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume: []
       emit:
@@ -29,9 +67,29 @@ commands:
             - payload.language
   - name: health
     type: read
-    description: "Validate playlist configuration."
+    description: "Validate that config.playlist_id or config.playlist_url resolves to a parseable playlist ID, and that yt-dlp is on PATH. Does not actually fetch."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+        error:
+          type: string
+          description: "Present on error — 'Missing playlist_id or playlist_url' / 'yt-dlp not found in PATH'."
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 fact_outputs:
   - when:
       command: poll
