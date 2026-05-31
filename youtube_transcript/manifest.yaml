@@ -1,27 +1,120 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: youtube_transcript
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Fetch YouTube video transcripts from URL or video ID"
+concurrency_safe: false
+description: "Fetch a YouTube video transcript from URL or video ID. Tries the direct player_response API first (json3 or xml caption tracks); falls back to yt-dlp for stubborn / age-gated videos. Stateful — maintains a running executions_count plus last_video_id and last_language via fact_outputs (the counter would otherwise be silently broken since state_updates without fact_outputs are discarded by the gateway). Serial-only: every invocation may shell out to yt-dlp; concurrent runs against the same video could thrash the network."
 commands:
   - name: poll
     type: write
-    description: "No-op scheduled tick — youtube_transcript is event-driven."
+    description: "Diagnostic no-op. youtube_transcript is event-driven; poll exists only so the gateway can periodically exercise the plugin without producing side effects."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        result:
+          type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume: []
       emit: []
   - name: handle
     type: write
-    description: "Fetch the transcript for a YouTube video by URL or video ID."
+    description: "Fetch one video's transcript. Resolves the video ID from payload.url / video_url / video_id / id. Language preference: payload.language → payload.lang → config.default_language → 'en'. Picks json3 caption track when available (smaller, faster) else xml. Falls back to yt-dlp (with optional config.js_runtime_path for the JS interpreter) on direct-fetch failure. Emits youtube.transcript with the text plus original transcript object, language metadata, and any pipeline-context fields (prompt, pattern, output_dir/path, filename, request_id, request_source) forwarded unchanged."
     idempotent: true
     retry_safe: true
     input_schema:
-      url: string
-      language: string
+      type: object
+      properties:
+        url:
+          type: string
+          description: "Full YouTube URL. Required (or video_url / video_id / id as alternatives)."
+        video_url:
+          type: string
+          description: "Alias for url."
+        video_id:
+          type: string
+          description: "Bare 11-char video ID. Alternative to url."
+        id:
+          type: string
+          description: "Alias for video_id."
+        language:
+          type: string
+          description: "Caption track language (e.g. 'en', 'es'). Overrides config.default_language."
+        lang:
+          type: string
+          description: "Alias for language."
+        prompt:
+          type: string
+          description: "Pipeline-context — forwarded into the youtube.transcript event payload."
+        pattern:
+          type: string
+          description: "Pipeline-context — forwarded into the youtube.transcript event payload."
+        output_dir:
+          type: string
+          description: "Pipeline-context — forwarded."
+        output_path:
+          type: string
+          description: "Pipeline-context — forwarded."
+        filename:
+          type: string
+          description: "Pipeline-context — forwarded."
+        request_id:
+          type: string
+          description: "Pipeline-context — forwarded."
+        request_source:
+          type: string
+          description: "Pipeline-context — forwarded."
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+        error:
+          type: string
+        retry:
+          type: boolean
+          description: "Present on error — true for transient (network/transport/yt-dlp), false for missing-input/parse failure."
+        events:
+          type: array
+          description: "Present on ok — single youtube.transcript event."
+          items:
+            type: object
+        state_updates:
+          type: object
+          description: "Present on ok — { last_run, last_video_id, last_language, executions_count }. Snapshotted as youtube_transcript.snapshot via fact_outputs. The executions_count read on the next invocation closes the round-trip."
+          properties:
+            last_run:
+              type: string
+            last_video_id:
+              type: string
+            last_language:
+              type: string
+            executions_count:
+              type: integer
+              minimum: 0
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.url
@@ -57,9 +150,34 @@ commands:
             - payload.request_source
   - name: health
     type: read
-    description: "Returns plugin health status."
+    description: "Static health probe — returns ok unconditionally. Does not call YouTube to avoid burning quota on health checks."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        result:
+          type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
+fact_outputs:
+  - when:
+      command: handle
+    from: state_updates
+    fact_type: youtube_transcript.snapshot
+    compatibility_view: mirror_object
 config_keys:
   required: []
-  optional: [default_language, request_timeout_seconds, user_agent, js_runtime_path]
+  optional:
+    - default_language
+    - request_timeout_seconds
+    - user_agent
+    - js_runtime_path
