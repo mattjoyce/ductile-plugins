@@ -46,10 +46,12 @@ plugins:
     enabled: true
     timeout: 300s
     max_attempts: 1
-    concurrency_safe: false
+    parallelism: 1            # enforce serial dispatch (matches concurrency_safe: false in the manifest)
     config:
       default_min_conf: 0.7
 ```
+
+> **Note**: `concurrency_safe` is a manifest field (declared `false` here because birda contends for a single GPU); enforce it at runtime by pinning `parallelism: 1` in `plugins.yaml`.
 
 Example payload:
 ```json

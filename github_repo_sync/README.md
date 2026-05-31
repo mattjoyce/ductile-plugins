@@ -29,6 +29,10 @@ Emits events:
   - `owner`, `owner_type`, `clone_dir`
   - `queued`, `skipped`, `total`
 
+## Durable state
+
+Returns `state_updates` on successful `handle`/`poll` with `{last_run, last_summary}`. Snapshotted as `github_repo_sync.snapshot` via `fact_outputs` (mirror_object). Useful for an external watchdog asking "when did repo discovery last run?" — since the plugin itself does not read state, this is purely an audit trail.
+
 ## Example
 ```yaml
 plugins:
