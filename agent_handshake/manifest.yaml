@@ -104,6 +104,12 @@ commands:
             type: object
       required: [status, logs]
       additionalProperties: false
+fact_outputs:
+  - when:
+      command: handle
+    from: state_updates
+    fact_type: agent_handshake.snapshot
+    compatibility_view: mirror_object
 config_keys:
   required: [challenge, salt]
   optional:
