@@ -1,16 +1,59 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: repo_policy
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Ensure repos have README/CHANGELOG and a README changelog link."
+concurrency_safe: false
+description: "Enforce standardised README.md and CHANGELOG.md structure in a git repository. Creates README.md with a configurable top-level heading (defaults to repo_name) if missing; creates CHANGELOG.md with config.changelog_heading (default 'Changelog') if missing; ensures the README links to the changelog. Idempotent at the policy level (re-runs converge), but each run that writes is non-idempotent at the file level. Pair with a downstream git_commit_push to materialise the changes. Stateless — no plugin-side durable state."
 commands:
   - name: handle
     type: write
-    description: "Enforce standardised README and CHANGELOG structure in a git repository."
+    description: "Resolve the target repo from payload.repo_path or payload.path (or payload.owner + payload.repo_name + payload.clone_dir), then ensure README.md and CHANGELOG.md exist with the configured headings and the README links to the changelog. Returns changed:true/false and the list of files touched."
     idempotent: false
     retry_safe: true
+    input_schema:
+      type: object
+      properties:
+        repo_path:
+          type: string
+          description: "Direct path to the repo. Required (or path / owner+repo_name+clone_dir as alternatives)."
+        path:
+          type: string
+          description: "Alias for repo_path."
+        owner:
+          type: string
+          description: "When repo_path is absent, used with repo_name + clone_dir to resolve <clone_dir>/<owner>/<repo_name>."
+        repo_name:
+          type: string
+          description: "Repo name (paired with owner + clone_dir for path resolution)."
+        clone_dir:
+          type: string
+          description: "Base directory under which <owner>/<repo_name> is found."
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+        error:
+          type: string
+        retry:
+          type: boolean
+        events:
+          type: array
+          description: "Single repo_policy.completed event on ok (always — files_changed: [] is the no-op shape)."
+          items:
+            type: object
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.path
@@ -27,9 +70,26 @@ commands:
             - payload.files_changed
   - name: health
     type: read
-    description: "Return health status."
+    description: "Returns ok unconditionally — no per-instance state to validate."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        result:
+          type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 config_keys:
   required: []
-  optional: [readme_heading, changelog_heading]
+  optional:
+    - readme_heading
+    - changelog_heading
