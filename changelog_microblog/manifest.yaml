@@ -1,16 +1,76 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: changelog_microblog
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Generate micro-blog changelog entries from recent commits."
+concurrency_safe: false
+description: "Generate a micro-blog CHANGELOG.md entry from recent commits in a git repository using fabric. Fetches origin, resets HEAD to origin/<default_branch>, runs fabric against `git log --since=<last>` output, filters vague messages, and prepends the formatted entry to CHANGELOG.md. Stateful per-repo — declares fact_outputs so last_run and last_changelog_at survive restarts. Serial-only per repo (git index writes); pair with `parallelism: 1` if running against the same repo from multiple pipelines."
 commands:
   - name: handle
     type: write
-    description: "Use AI to generate and append a micro-blog entry to a git repository's CHANGELOG.md from provided content."
+    description: "Build a microblog entry for one repo. Reads payload.repo_path (or payload.path); falls back to context. Performs a destructive `git reset --hard origin/<default_branch>` first — local repo state is overwritten by remote. Computes the cutoff from the most recent CHANGELOG.md commit timestamp (or 7 days ago if none). Pipes the resulting `git log` through `fabric -p <pattern>` to produce the entry. If the entry is non-empty after vague-filtering, prepends it to CHANGELOG.md and writes the file. Emits changelog_microblog.completed with changed: true/false."
     idempotent: false
     retry_safe: true
+    input_schema:
+      type: object
+      properties:
+        repo_path:
+          type: string
+          description: "Local filesystem path to the git repo. Required (or `path` as alias)."
+        path:
+          type: string
+          description: "Alias for repo_path."
+        repo_name:
+          type: string
+          description: "Display name for the repo. Defaults to basename(repo_path)."
+        ssh_url:
+          type: string
+          description: "Optional SSH clone URL — carried into the completion event for downstream consumers."
+        clone_url:
+          type: string
+          description: "Optional HTTPS clone URL — carried into the completion event."
+        default_branch:
+          type: string
+          description: "Branch name to fetch/reset against. Defaults to 'main'."
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+          description: "Plugin envelope status."
+        result:
+          type: string
+          description: "Present on ok — 'changelog_microblog: updated CHANGELOG.md' or a no-change summary."
+        error:
+          type: string
+          description: "Present on error — git fetch/reset failure, fabric failure, missing repo path, or vague-filter rejection."
+        retry:
+          type: boolean
+          description: "Present on error — true for transient git failures (fetch/reset network), false for config/structural errors."
+        events:
+          type: array
+          description: "Present on ok — single changelog_microblog.completed event."
+          items:
+            type: object
+        state_updates:
+          type: object
+          description: "Present only when CHANGELOG.md was actually updated — { last_run, last_changelog_at } as ISO timestamps. Snapshotted per-repo via fact_outputs (see below)."
+          properties:
+            last_run:
+              type: string
+              description: "ISO timestamp of this run."
+            last_changelog_at:
+              type: string
+              description: "Date string of the entry written."
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.repo_path
@@ -32,9 +92,39 @@ commands:
             - payload.clone_url
   - name: health
     type: read
-    description: "Return health status."
+    description: "Verify the fabric binary is callable. Does not invoke fabric against a real prompt."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'changelog_microblog healthy'."
+        error:
+          type: string
+          description: "Present on error — fabric binary not found or fabric --help failed."
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
+fact_outputs:
+  - when:
+      command: handle
+    from: state_updates
+    fact_type: changelog_microblog.snapshot
+    compatibility_view: mirror_object
 config_keys:
   required: []
-  optional: [fabric_bin, fabric_pattern, patterns_path, author_name, author_email]
+  optional:
+    - fabric_bin
+    - fabric_pattern
+    - patterns_path
