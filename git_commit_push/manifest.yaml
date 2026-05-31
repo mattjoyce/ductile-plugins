@@ -1,16 +1,62 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: git_commit_push
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Commit and push repo changes (README/CHANGELOG) with ductile author."
+concurrency_safe: false
+description: "Stage, commit, and push changes in a configured git repository under a ductile author identity (defaults: ductile / ductile@local). Reads payload.repo_path (or payload.path); fetches origin first, no-op-exits when the working tree is clean. Optional SSH rewrite via prefer_ssh + ssh_alias_host so deploy keys can authenticate without rewriting the public clone URL. Serial-only per repo (git index writes race); pair with `parallelism: 1` if multiple pipelines may target the same repo simultaneously."
 commands:
   - name: handle
     type: write
-    description: "Stage, commit, and push changes to a configured git repository."
+    description: "Stage everything (git add -A), commit with config.commit_message and the configured author, and push the configured branch. Exits early with `changed: false` and no commit if the working tree is clean after staging. Emits git_commit_push.completed on either path (changed flag distinguishes them)."
     idempotent: false
     retry_safe: true
+    input_schema:
+      type: object
+      properties:
+        repo_path:
+          type: string
+          description: "Local filesystem path to the repo. Required (or `path` as alias)."
+        path:
+          type: string
+          description: "Alias for repo_path."
+        repo_name:
+          type: string
+          description: "Display name. Defaults to basename(repo_path)."
+        default_branch:
+          type: string
+          description: "Branch to push to. Defaults to 'main'."
+        ssh_url:
+          type: string
+          description: "Optional SSH URL for remote rewrite (paired with config.prefer_ssh)."
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'git_commit_push: pushed <repo>' or no-op summary."
+        error:
+          type: string
+          description: "Present on error — git fetch/add/commit/push failure or invalid repo path."
+        retry:
+          type: boolean
+          description: "Present on error — true for transient (network/push race), false for structural."
+        events:
+          type: array
+          description: "Single git_commit_push.completed event on ok. changed:false case is also emitted so downstream pipelines see the no-op."
+          items:
+            type: object
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.repo_path
@@ -27,9 +73,29 @@ commands:
             - payload.commit_sha
   - name: health
     type: read
-    description: "Return health status."
+    description: "Returns 'healthy' unconditionally — there is no per-instance config to validate and no external dependency to probe beyond git, which the dispatcher's PATH already covers."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        result:
+          type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 config_keys:
   required: []
-  optional: [author_name, author_email, commit_message, prefer_ssh, ssh_alias_host]
+  optional:
+    - author_name
+    - author_email
+    - commit_message
+    - prefer_ssh
+    - ssh_alias_host
