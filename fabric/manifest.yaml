@@ -1,31 +1,118 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: fabric
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Wrapper for fabric AI pattern tool - processes text through predefined patterns"
+concurrency_safe: false
+description: "Wrapper for the fabric AI pattern CLI (github.com/danielmiessler/fabric). Routes inbound text / URLs / YouTube links through a chosen pattern (or freeform prompt) and emits the result as fabric.completed. Stateful — maintains a running executions_count and last_run/last_pattern/last_prompt snapshot via fact_outputs. Serial-only: every invocation shells out to fabric with a 120s timeout; concurrent runs would contend for the fabric process and any pattern-specific model state."
 commands:
   - name: poll
     type: write
-    description: "No-op scheduled tick — no configured scheduled actions."
+    description: "Diagnostic no-op. fabric is event-driven; the poll command exists only so the gateway can periodically exercise the plugin without producing side effects. Does not invoke fabric."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        result:
+          type: string
+          description: "Always 'Fabric poll command - no scheduled actions configured'."
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume: []
       emit: []
   - name: handle
     type: write
-    description: "Process a prompt or content through an AI pattern (default: summarize). Accepts raw text, URLs, or transcripts. Use the 'pattern' field to select a pattern, 'prompt' for freeform, or 'text'/'url'/'youtube_url' for content."
+    description: "Run one fabric invocation. Composes input from payload.text or payload.content (optionally with a payload.prompt prefix); falls back to URL fetching via fabric's --scrape_url for payload.url or --youtube for payload.youtube_url. Pattern resolution: payload.pattern wins; else config.FABRIC_DEFAULT_PATTERN (unless in prompt-only mode). 120s subprocess timeout. Emits fabric.completed with the captured output and metadata; propagates downstream pipeline fields (output_dir, output_path, filename, file_path) into the event payload."
     idempotent: false
     retry_safe: true
     input_schema:
-      text: string
-      url: string
-      youtube_url: string
-      pattern: string
-      prompt: string
-      model: string
+      type: object
+      properties:
+        text:
+          type: string
+          description: "Raw text to run through the pattern. Mutually populates with content."
+        content:
+          type: string
+          description: "Alias for text."
+        url:
+          type: string
+          description: "URL for fabric --scrape_url. Mutually exclusive with youtube_url."
+        youtube_url:
+          type: string
+          description: "YouTube URL for fabric --youtube."
+        pattern:
+          type: string
+          description: "Named fabric pattern to apply. Falls back to config.FABRIC_DEFAULT_PATTERN."
+        prompt:
+          type: string
+          description: "Freeform prompt. Prepended to text input, or used alone in prompt-only mode."
+        model:
+          type: string
+          description: "Model override (e.g. 'claude-sonnet-4-6'). Falls back to config.FABRIC_DEFAULT_MODEL."
+        output_dir:
+          type: string
+          description: "Pipeline-context field, forwarded into the fabric.completed event payload."
+        output_path:
+          type: string
+          description: "Pipeline-context field, forwarded into the fabric.completed event payload."
+        filename:
+          type: string
+          description: "Pipeline-context field, forwarded into the fabric.completed event payload."
+        file_path:
+          type: string
+          description: "Pipeline-context field, forwarded into the fabric.completed event payload."
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — short log message describing the run (pattern/url/youtube + prompt summary)."
+        error:
+          type: string
+          description: "Present on error — missing input, fabric binary not found, fabric exit non-zero, or timeout."
+        retry:
+          type: boolean
+          description: "Present on error — true for transient (timeout, fabric non-zero exit); false for structural (binary missing, missing input)."
+        events:
+          type: array
+          description: "Present on ok — single fabric.completed event."
+          items:
+            type: object
+        state_updates:
+          type: object
+          description: "Present on ok — { last_run, executions_count, last_pattern, last_prompt }. Snapshotted as fabric.snapshot via fact_outputs; executions_count is the rolling tally and is read back on the next invocation."
+          properties:
+            last_run:
+              type: string
+              description: "ISO timestamp of this run."
+            executions_count:
+              type: integer
+              minimum: 0
+            last_pattern:
+              type: string
+            last_prompt:
+              type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.text
@@ -56,9 +143,40 @@ commands:
             - payload.file_path
   - name: health
     type: read
-    description: "Check fabric binary availability and list available patterns."
+    description: "Verify the fabric binary is callable and report the count of available patterns (via `fabric --listpatterns`). Does not invoke an actual pattern."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'Fabric healthy, <n> patterns available'."
+        error:
+          type: string
+          description: "Present on error — fabric binary not found, --help failed, or timeout."
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
+fact_outputs:
+  - when:
+      command: handle
+    from: state_updates
+    fact_type: fabric.snapshot
+    compatibility_view: mirror_object
 config_keys:
   required: []
-  optional: [FABRIC_BIN_PATH, FABRIC_DEFAULT_MODEL]
+  optional:
+    - FABRIC_BIN_PATH
+    - FABRIC_DEFAULT_MODEL
+    - FABRIC_DEFAULT_PATTERN
+    - FABRIC_DEFAULT_PROMPT
