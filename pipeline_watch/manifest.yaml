@@ -1,0 +1,35 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: pipeline_watch
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Generic liveness/incident watcher. Scheduled poll reads the job_log table for ALL plugins, detects failure-streaks and stalls (no hardcoded plugin names), records incidents in its own pipeline_watch_incidents table with an open/resolved lifecycle, and emits ductile.health.alert for each new incident. Read-only on job_log."
+concurrency_safe: true
+commands:
+  - name: poll
+    type: write
+    description: "Scan job_log for failure-streaks and stalls across all plugins; open/refresh/resolve incidents and emit ductile.health.alert for new ones."
+    idempotent: true
+    retry_safe: true
+    values:
+      emit:
+        - event: ductile.health.alert
+          values:
+            - payload.plugin
+            - payload.kind
+            - payload.detail
+            - payload.since
+            - payload.message
+  - name: health
+    type: read
+    description: "Plugin self-check. Confirms job_log is queryable and reports thresholds."
+    idempotent: true
+    retry_safe: true
+config_keys:
+  required: []
+  optional:
+    - db_path
+    - streak_threshold
+    - stall_minutes
+    - lookback_minutes

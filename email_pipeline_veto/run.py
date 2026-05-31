@@ -20,7 +20,7 @@ Decision tiers:
     (trusted sender skips fast-block and escalates to LLM)
 
   LLM-ADJUDICATED: everything else (or trusted sender at high score)
-    → call gemma-3 with all scores + sender context as 4th judge
+    → call claude-haiku-4-5 with all scores + sender context as 4th judge
     → score ≥ 0.5 → quarantine, else → process
     → LLM failure → fallback quarantine (safe-fail)
 
@@ -46,17 +46,19 @@ Event emitted: email.process_decision
   payload.llm_score     — float if LLM was called, else null
   dedupe_key            — process-decision:msg:<message_id>
 
-Config keys (all optional):
-  llm_endpoint_url  (str, default http://192.168.20.4:11440/v1/chat/completions)
-  llm_model         (str, default "gemma-3-4b")
-  llm_timeout_s     (int, default 60)
+Config keys:
+  anthropic_api_key (str, required for LLM tier; falls back to $ANTHROPIC_API_KEY.
+                     Missing key → fallback quarantine, never a crash)
+  llm_endpoint_url  (str, default https://api.anthropic.com/v1/messages)
+  llm_model         (str, default "claude-haiku-4-5")
+  llm_timeout_s     (int, default 30)
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
-import urllib.error
 import urllib.request
 from typing import Any, NotRequired, TypedDict
 
@@ -75,9 +77,10 @@ FAST_PASS_THRESHOLD = 0.15
 FAST_BLOCK_THRESHOLD = 0.90
 LLM_BLOCK_THRESHOLD = 0.5
 
-DEFAULT_LLM_ENDPOINT = "http://192.168.20.4:11440/v1/chat/completions"
-DEFAULT_LLM_MODEL = "gemma-3-4b"
-DEFAULT_LLM_TIMEOUT_S = 60
+DEFAULT_LLM_ENDPOINT = "https://api.anthropic.com/v1/messages"
+DEFAULT_LLM_MODEL = "claude-haiku-4-5"
+DEFAULT_LLM_TIMEOUT_S = 30
+ANTHROPIC_VERSION = "2023-06-01"
 
 TRUSTED_CONTEXT = "Trusted sender — established relationship, prior email history."
 UNKNOWN_CONTEXT = "Unknown sender — first-time or unverified sender address."
@@ -233,9 +236,14 @@ def _llm_adjudicate(
     *,
     endpoint: str,
     model: str,
+    api_key: str,
     timeout_s: int,
 ) -> float | None:
-    """Call gemma-3 as the 4th judge. Returns float 0.0-1.0 or None on failure."""
+    """Call claude-haiku-4-5 (Anthropic Messages API) as the 4th judge.
+
+    Returns float 0.0-1.0, or None on unparseable response. Network/timeout
+    errors propagate to the caller, which fails safe to quarantine.
+    """
     sender_ctx = TRUSTED_CONTEXT if trust_level == TRUST_TRUSTED else UNKNOWN_CONTEXT
     user_msg = (
         f"Sender context: {sender_ctx}\n"
@@ -247,21 +255,25 @@ def _llm_adjudicate(
     )
     body = json.dumps({
         "model": model,
-        "temperature": 0,
         "max_tokens": 8,
+        "temperature": 0,
+        "system": LLM_SYSTEM_PROMPT,
         "messages": [
-            {"role": "system", "content": LLM_SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
         ],
     }).encode()
     req = urllib.request.Request(  # nosec B310
         endpoint,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "content-type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": ANTHROPIC_VERSION,
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # nosec B310
-        content = json.loads(resp.read())["choices"][0]["message"]["content"].strip()
+        content = json.loads(resp.read())["content"][0]["text"].strip()
     try:
         val = float(content.split()[0].rstrip(".,"))
         return max(0.0, min(1.0, val))
@@ -284,6 +296,7 @@ def tiered_decision(
     llm_endpoint = str(config.get("llm_endpoint_url") or DEFAULT_LLM_ENDPOINT)
     llm_model = str(config.get("llm_model") or DEFAULT_LLM_MODEL)
     llm_timeout = int(config.get("llm_timeout_s") or DEFAULT_LLM_TIMEOUT_S)
+    llm_api_key = str(config.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY") or "")
 
     max_score = max(scores.values())
     all_low = all(v <= FAST_PASS_THRESHOLD for v in scores.values())
@@ -318,12 +331,34 @@ def tiered_decision(
         }, logs
 
     # Edge case (or trusted sender with high score) — call LLM
+    if not llm_api_key:
+        logs.append({
+            "level": "warn",
+            "message": "no anthropic_api_key configured; fallback quarantine",
+        })
+        return {
+            "message_id": str(msg_id),
+            "decision": DECISION_QUARANTINE,
+            "path": "llm_fallback",
+            "trust_level": trust_level,
+            "scores": scores,
+            "llm_score": None,
+        }, logs
+
     llm_score: float | None = None
     try:
         llm_score = _llm_adjudicate(
-            scores, trust_level, endpoint=llm_endpoint, model=llm_model, timeout_s=llm_timeout
+            scores,
+            trust_level,
+            endpoint=llm_endpoint,
+            model=llm_model,
+            api_key=llm_api_key,
+            timeout_s=llm_timeout,
         )
-    except (urllib.error.URLError, urllib.error.HTTPError, KeyError, json.JSONDecodeError) as exc:
+    # OSError covers TimeoutError/socket timeout/connection errors (incl. URLError,
+    # HTTPError); parse failures cover a malformed Messages API response. Any of
+    # these → fail safe to quarantine rather than crashing the pipeline.
+    except (OSError, KeyError, IndexError, ValueError, json.JSONDecodeError) as exc:
         logs.append({"level": "warn", "message": f"LLM call failed ({exc}); fallback quarantine"})
         return {
             "message_id": str(msg_id),

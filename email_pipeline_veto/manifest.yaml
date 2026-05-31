@@ -1,7 +1,7 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: email_pipeline_veto
-version: 0.3.0
+version: 0.4.0
 protocol: 2
 entrypoint: run.py
 description: "Stage 6 of the ductile email pipeline. 5-input tiered fusion (4 scorers + sender trust): fast-pass (all scores ≤ 0.15), fast-block (any score ≥ 0.90, unknown sender), LLM-adjudicated (edge cases + trusted-sender high-score). Emits email.process_decision."
@@ -32,6 +32,7 @@ commands:
 config_keys:
   required: []
   optional:
+    - anthropic_api_key
     - llm_endpoint_url
     - llm_model
     - llm_timeout_s

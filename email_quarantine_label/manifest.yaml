@@ -1,0 +1,34 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: email_quarantine_label
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+description: "Act-step for the email security pipeline. On a QUARANTINE decision, applies a Gmail label (default ductile/needs-review) to the message via the gws CLI and leaves it in place, so quarantined mail is visible rather than silently dropped. Does no scoring."
+concurrency_safe: true
+commands:
+  - name: handle
+    type: write
+    description: "Apply the needs-review Gmail label to context.mail.message_id. Defensive no-op if an upstream decision is present and is not 'quarantine'. Emits email.quarantine_labeled."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume:
+        - payload.message_id
+        - payload.decision
+      emit:
+        - event: email.quarantine_labeled
+          values:
+            - payload.message_id
+            - payload.label_name
+            - payload.label_id
+  - name: health
+    type: read
+    description: "Plugin self-check. Confirms the gws binary is on PATH and reports the configured label name."
+    idempotent: true
+    retry_safe: true
+config_keys:
+  required: []
+  optional:
+    - gws_binary
+    - label_name
