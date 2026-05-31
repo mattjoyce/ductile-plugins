@@ -1,16 +1,49 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: github_repo_sync
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Discover public GitHub repos updated recently and ensure local clones are up to date."
+concurrency_safe: false
+description: "Discover public (or private with token) GitHub repos for one configured owner whose pushed_at is within config.lookback_days, then emit one github_repo_sync.repo_discovered event per repo so a downstream git_repo_sync pipeline can clone/fetch each. The discovery itself is the work; this plugin does not clone. Stateful — declares fact_outputs so last_run + last_summary persist as github_repo_sync.snapshot facts (useful for an external watchdog to see when discovery last ran)."
 commands:
   - name: poll
     type: write
-    description: "Discover public repos and clone/fetch them locally."
+    description: "Same code path as handle. Used for scheduled re-discovery."
     idempotent: false
     retry_safe: false
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+        error:
+          type: string
+        retry:
+          type: boolean
+        events:
+          type: array
+          description: "N+1 events — one repo_discovered per matching repo, followed by one github_repo_sync.completed summary."
+          items:
+            type: object
+        state_updates:
+          type: object
+          description: "Present on ok — { last_run, last_summary }. Snapshotted as github_repo_sync.snapshot via fact_outputs."
+          properties:
+            last_run:
+              type: string
+            last_summary:
+              type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume: []
       emit:
@@ -39,9 +72,39 @@ commands:
             - payload.last_run
   - name: handle
     type: write
-    description: "Discover and sync public repos from a configured GitHub user account."
+    description: "Discover repos for config.owner via the GitHub REST API and emit one repo_discovered event per repo whose pushed_at is within config.lookback_days (default 730). Token resolution: config.github_token > $config.github_token_env (default GITHUB_TOKEN). owner_type defaults to 'user'; switch to 'org' for organisations. include_private requires a token with appropriate scope."
     idempotent: false
     retry_safe: false
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+        error:
+          type: string
+        retry:
+          type: boolean
+        events:
+          type: array
+          items:
+            type: object
+        state_updates:
+          type: object
+          properties:
+            last_run:
+              type: string
+            last_summary:
+              type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume: []
       emit:
@@ -70,9 +133,42 @@ commands:
             - payload.last_run
   - name: health
     type: read
-    description: "Return health status."
+    description: "Returns 'healthy' unconditionally — no per-instance probe of the GitHub API to avoid spending rate-limit on health checks."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        result:
+          type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
+fact_outputs:
+  - when:
+      command: handle
+    from: state_updates
+    fact_type: github_repo_sync.snapshot
+    compatibility_view: mirror_object
+  - when:
+      command: poll
+    from: state_updates
+    fact_type: github_repo_sync.snapshot
+    compatibility_view: mirror_object
 config_keys:
   required: [owner]
-  optional: [owner_type, clone_dir, lookback_days, include_private, include_forks, github_token, github_token_env]
+  optional:
+    - owner_type
+    - clone_dir
+    - lookback_days
+    - include_private
+    - include_forks
+    - github_token
+    - github_token_env
