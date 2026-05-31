@@ -1,16 +1,66 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: git_repo_sync
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Clone or fetch a single Git repository based on event payload."
+concurrency_safe: false
+description: "Clone or fetch one git repository per inbound event. If the repo directory doesn't exist, clones; otherwise fetches origin and fast-forwards the default branch (no merge — diverged branches log a warning rather than rewrite history). Optional SSH rewrite via config.prefer_ssh + ssh_alias_host so deploy keys can authenticate without rewriting the public clone URL. Serial-only per repo (git index writes race); pair with `parallelism: 1` if multiple pipelines may target the same repo simultaneously."
 commands:
   - name: handle
     type: write
-    description: "Clone or fetch a single repository."
+    description: "Clone or fetch one repo identified by payload.owner + payload.repo_name. Resolves the target path from payload.clone_dir + owner/repo. On fetch, computes before_sha and after_sha + new_commits count so downstream pipelines can short-circuit when there's nothing new. Emits git_repo_sync.completed with action ∈ {cloned, fetched, no_change}."
     idempotent: false
     retry_safe: true
+    input_schema:
+      type: object
+      properties:
+        owner:
+          type: string
+          description: "Repo owner (e.g. GitHub user or org). Required."
+        repo_name:
+          type: string
+          description: "Repo name. Required."
+        clone_url:
+          type: string
+          description: "HTTPS clone URL. Used when cloning; one of clone_url / ssh_url is required."
+        ssh_url:
+          type: string
+          description: "SSH clone URL. Preferred when config.prefer_ssh is true."
+        default_branch:
+          type: string
+          description: "Branch to fetch + fast-forward. Defaults to 'main'."
+        clone_dir:
+          type: string
+          description: "Base directory under which <owner>/<repo_name> is created. Required."
+      required: [owner, repo_name, clone_dir]
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'Repo sync <action>: <owner>/<repo_name>'."
+        error:
+          type: string
+          description: "Present on error — git clone/fetch/rev-parse failure or invalid inputs."
+        retry:
+          type: boolean
+          description: "Present on error — true for transient (network), false for structural."
+        events:
+          type: array
+          description: "Single git_repo_sync.completed event on ok."
+          items:
+            type: object
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.owner
@@ -38,9 +88,26 @@ commands:
             - payload.ssh_url
   - name: health
     type: read
-    description: "Return health status."
+    description: "Returns 'healthy' unconditionally — no per-instance config to validate; git is assumed on PATH."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        result:
+          type: string
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 config_keys:
   required: []
-  optional: [prefer_ssh, ssh_alias_host]
+  optional:
+    - prefer_ssh
+    - ssh_alias_host
