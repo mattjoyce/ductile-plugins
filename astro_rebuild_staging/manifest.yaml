@@ -1,22 +1,54 @@
-# COPY CHECKLIST:
-# 1) Copy this folder to a new plugin directory (e.g. plugins/astro_refresh/).
-# 2) Change `name:` below so it is unique across all plugin roots.
-# 3) Keep `entrypoint: run.py` unless you intentionally swap runtimes.
-# 4) Configure `plugins.<your_name>.config.command` in config.yaml.
-# 5) Optionally set `event_type` per clone to avoid route ambiguity.
+# astro_rebuild_staging — generic sys_exec clone for the staging Astro
+# site rebuild. run.py is byte-identical to astro_rebuild_prod's; the
+# only difference between clones is the manifest name (so they appear as
+# distinct plugins in plugins.yaml) and the default event_type emitted.
+# The actual command is set in plugins.yaml at the deploy site.
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: astro_rebuild_staging
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Rebuild and restart the local Astro staging site via docker compose."
+concurrency_safe: false
+description: "Rebuild and restart the local Astro staging site via docker compose. Generic sys_exec clone — runs the operator-configured command and emits a sys_exec.completed event (override via config.event_type) with exit metadata. Payload values are surfaced as DUCTILE_PAYLOAD_<KEY> env vars, never spliced into command text (defense against shell injection from any caller). Serial-only — pair with `parallelism: 1` in plugins.yaml because docker compose build is not safe to run concurrently against the same project."
 commands:
   - name: handle
     type: write
-    description: "Rebuild and restart the local Astro staging site via Docker Compose. No payload required."
+    description: "Run the operator-configured command in a subprocess. Captures stdout/stderr (truncated to stdout_max_bytes/stderr_max_bytes), times out at config.timeout_seconds, and emits a completion event with exit_code, duration_ms, and output. Payload is exposed only as env vars; never interpolated. Exit codes listed in config.retry_on_exit_codes mark the response as retry-eligible."
     idempotent: false
     retry_safe: true
+    input_schema:
+      type: object
+      description: "Trigger payload — opaque to the command (surfaced only as DUCTILE_PAYLOAD_<KEY> env vars). Any extra fields are accepted and forwarded."
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+          description: "Plugin envelope status."
+        result:
+          type: string
+          description: "Present on ok — 'command exited with code <n> in <ms>ms'."
+        error:
+          type: string
+          description: "Present on error — stderr text or 'command timed out after <s>s' / 'command failed with exit code <n>'."
+        retry:
+          type: boolean
+          description: "Present on error — true only when the exit code matches config.retry_on_exit_codes; transient timeouts are never retried."
+        events:
+          type: array
+          description: "Present when config.emit_event=true (default) — single completion event of type config.event_type."
+          items:
+            type: object
+        logs:
+          type: array
+          items:
+            type: object
+          description: "Always present — info/error/debug entries for the command, plus stdout/stderr previews when present."
+      required: [status, logs]
+      additionalProperties: false
     values:
       consume:
         - payload.*
@@ -34,9 +66,30 @@ commands:
             - payload.executed_at
   - name: health
     type: read
-    description: "Validate command and runtime prerequisites."
+    description: "Validate the configured command is well-formed: config.command is set, the executable resolves via PATH, and config.working_dir (if set) is an existing directory. Does not actually run the command."
     idempotent: true
     retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+          description: "Present on ok — 'sys_exec health check passed'."
+        error:
+          type: string
+          description: "Present on error — missing command, executable-not-in-PATH, or invalid working_dir."
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
 config_keys:
   required: [command]
   optional:
