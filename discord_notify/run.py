@@ -79,15 +79,31 @@ def post_to_discord(webhook_url: str, discord_payload: Dict[str, Any], timeout: 
             raise RuntimeError(f"Discord returned HTTP {resp.status}")
 
 
+def resolve_webhook_url(config: Dict[str, Any], secrets: Dict[str, Any]) -> str:
+    """Resolve the Discord webhook URL.
+
+    Vault-native (preferred): the operator registers this plugin as a principal and
+    grants it the `discord_webhook_url` secret, delivered over stdin in the `secrets`
+    map. Falls back to config.webhook_url for unconfined/legacy deployments.
+    """
+    return str(
+        secrets.get("discord_webhook_url")
+        or config.get("webhook_url")
+        or ""
+    ).strip()
+
+
 def handle_command(
     config: Dict[str, Any],
     payload: Dict[str, Any],
     context: Dict[str, Any],
+    secrets: Dict[str, Any],
 ) -> Dict[str, Any]:
-    webhook_url = str(config.get("webhook_url") or "").strip()
+    webhook_url = resolve_webhook_url(config, secrets)
     if not webhook_url:
         return error_response(
-            "No webhook_url configured. Add to plugin config.", retry=False
+            "No webhook_url: grant the 'discord_webhook_url' vault secret to this "
+            "plugin's principal, or set config.webhook_url.", retry=False
         )
 
     content = pick(payload, context, "message", "content", default=None)
@@ -164,10 +180,10 @@ def handle_command(
     return ok_response(f"Discord notified: {preview!r}")
 
 
-def handle_health(config: Dict[str, Any]) -> Dict[str, Any]:
-    webhook_url = str(config.get("webhook_url") or "").strip()
+def handle_health(config: Dict[str, Any], secrets: Dict[str, Any]) -> Dict[str, Any]:
+    webhook_url = resolve_webhook_url(config, secrets)
     if not webhook_url:
-        return error_response("No webhook_url configured", retry=False)
+        return error_response("No webhook_url (vault secret or config)", retry=False)
     if not webhook_url.startswith("https://discord.com/api/webhooks/"):
         return error_response(
             f"webhook_url does not look like a Discord webhook: {webhook_url[:40]}",
@@ -188,12 +204,13 @@ def main() -> None:
 
     command = request.get("command", "")
     config = request.get("config") if isinstance(request.get("config"), dict) else {}
+    secrets = request.get("secrets") if isinstance(request.get("secrets"), dict) else {}
     event = request.get("event", {})
     context = request.get("context", {})
     payload = event.get("payload", {}) if isinstance(event, dict) else {}
 
     if command == "handle":
-        response = handle_command(config, payload, context)
+        response = handle_command(config, payload, context, secrets)
     elif command == "poll":
         # Scheduled polls: dispatcher doesn't pass event payload for non-handle commands.
         # Fall back to config-level poll_message so schedules can include a message.
@@ -201,9 +218,9 @@ def main() -> None:
             poll_msg = str(config.get("poll_message") or "").strip()
             if poll_msg:
                 payload = {**payload, "message": poll_msg}
-        response = handle_command(config, payload, context)
+        response = handle_command(config, payload, context, secrets)
     elif command == "health":
-        response = handle_health(config)
+        response = handle_health(config, secrets)
     else:
         response = error_response(
             f"Unknown command: '{command}'. Supported: handle, poll, health"

@@ -43,9 +43,20 @@ def compute_proof(challenge: str, salt: str) -> str:
     return hashlib.sha256((challenge + salt).encode()).hexdigest()
 
 
-def handle_command(config: Dict[str, Any], payload: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
+def resolve_salt(config: Dict[str, Any], secrets: Dict[str, Any]) -> str:
+    """Resolve the handshake salt.
+
+    Vault-native (preferred): config names the secret via `salt_secret` and the
+    operator grants that vault secret to this plugin's principal, delivered over
+    stdin in the `secrets` map. Falls back to config.salt for unconfined/legacy.
+    """
+    name = str(config.get("salt_secret") or "").strip()
+    return str((secrets.get(name) if name else None) or config.get("salt") or "").strip()
+
+
+def handle_command(config: Dict[str, Any], payload: Dict[str, Any], state: Dict[str, Any], secrets: Dict[str, Any]) -> Dict[str, Any]:
     challenge = str(config.get("challenge") or "").strip()
-    salt = str(config.get("salt") or "").strip()
+    salt = resolve_salt(config, secrets)
     log_path = str(config.get("log_path") or "").strip()
 
     if not challenge or not salt:
@@ -122,11 +133,11 @@ def handle_command(config: Dict[str, Any], payload: Dict[str, Any], state: Dict[
     )
 
 
-def handle_health(config: Dict[str, Any]) -> Dict[str, Any]:
+def handle_health(config: Dict[str, Any], secrets: Dict[str, Any]) -> Dict[str, Any]:
     challenge = str(config.get("challenge") or "").strip()
-    salt = str(config.get("salt") or "").strip()
+    salt = resolve_salt(config, secrets)
     if not challenge or not salt:
-        return error_response("Missing required config: challenge and/or salt", retry=False)
+        return error_response("Missing challenge and/or salt (vault secret or config)", retry=False)
     return ok_response(f"agent_handshake configured, challenge={challenge!r}")
 
 
@@ -141,14 +152,15 @@ def main() -> None:
 
     command = request.get("command", "")
     config = request.get("config") if isinstance(request.get("config"), dict) else {}
+    secrets = request.get("secrets") if isinstance(request.get("secrets"), dict) else {}
     state = request.get("state") if isinstance(request.get("state"), dict) else {}
     event = request.get("event", {})
     payload = event.get("payload", {}) if isinstance(event, dict) else {}
 
     if command == "handle":
-        response = handle_command(config, payload, state)
+        response = handle_command(config, payload, state, secrets)
     elif command == "health":
-        response = handle_health(config)
+        response = handle_health(config, secrets)
     else:
         response = error_response(f"Unknown command: '{command}'. Supported: handle, health")
 

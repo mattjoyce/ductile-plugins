@@ -74,6 +74,7 @@ def main() -> None:
     request = json.load(sys.stdin)
     command = request.get("command") or "poll"
     config = request.get("config") or {}
+    secrets = request.get("secrets") or {}
 
     if command == "health":
         respond(
@@ -102,7 +103,11 @@ def main() -> None:
     lookback_days = int(config.get("lookback_days", 730))
     include_private = bool(config.get("include_private", False))
     include_forks = bool(config.get("include_forks", True))
-    token = config.get("github_token")
+    # Vault-native (preferred): config names the secret via `token_secret`, granted to
+    # this plugin's principal and delivered over stdin. Falls back to config.github_token,
+    # then the legacy env var, for unconfined/legacy deployments.
+    token_secret = str(config.get("token_secret") or "").strip()
+    token = (secrets.get(token_secret) if token_secret else None) or config.get("github_token")
     token_env = config.get("github_token_env", "GITHUB_TOKEN")
     if not token:
         token = os.getenv(token_env) or os.getenv("GITHUB_TOKEN")

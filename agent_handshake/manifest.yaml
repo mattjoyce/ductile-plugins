@@ -111,6 +111,11 @@ fact_outputs:
     fact_type: agent_handshake.snapshot
     compatibility_view: mirror_object
 config_keys:
-  required: [challenge, salt]
+  # salt is vault-native: name the vault secret via `salt_secret`, granted to this
+  # plugin's principal (delivered over stdin). salt stays an OPTIONAL config fallback
+  # for unconfined/legacy. challenge stays required (not a secret).
+  required: [challenge]
   optional:
+    - salt
+    - salt_secret
     - log_path

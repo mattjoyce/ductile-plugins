@@ -131,8 +131,12 @@ commands:
       required: [status, logs]
       additionalProperties: false
 config_keys:
-  required: [webhook_url]
+  # webhook_url is now vault-native: granted as the `discord_webhook_url` secret and
+  # delivered over stdin. It remains an OPTIONAL config key for unconfined/legacy
+  # fallback, but is no longer required (the secret satisfies it under enforce).
+  required: []
   optional:
+    - webhook_url
     - default_username
     - default_avatar_url
     - default_message
