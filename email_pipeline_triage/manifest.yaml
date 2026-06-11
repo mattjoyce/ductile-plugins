@@ -31,3 +31,4 @@ config_keys:
   required: []
   optional:
     - trusted_label_id
+    - bot_address

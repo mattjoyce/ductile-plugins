@@ -37,3 +37,4 @@ config_keys:
     - gws_binary
     - label_filter
     - max_per_poll
+    - bot_address

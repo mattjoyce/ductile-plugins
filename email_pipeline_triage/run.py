@@ -26,6 +26,9 @@ Event emitted: email.triaged
 
 Config keys (all optional):
   trusted_label_id  (str)  — Gmail label ID for ductile/trusted-sender (default "Label_1")
+  bot_address       (str)  — when the From address contains this string (case-insensitive),
+                              the message is the bot's own outgoing reply; emit no event
+                              and break the self-reply loop. Default: "" (disabled).
 """
 
 from __future__ import annotations
@@ -171,8 +174,18 @@ def cmd_handle(config: dict[str, Any], event: dict[str, Any]) -> ResponseOk | Re
         return err("event.payload.raw_message_json is missing or not an object")
 
     trusted_label_id = str(config.get("trusted_label_id") or DEFAULT_TRUSTED_LABEL_ID)
+    bot_address = str(config.get("bot_address") or "").strip().lower()
 
     address = _extract_sender(raw_message_json)
+
+    # Self-reply guard: drop the message before any downstream stage runs.
+    if bot_address and address and bot_address in address:
+        drop_msg = (
+            f"DROP {msg_id}: address={address} matches bot_address={bot_address}"
+            " — self-reply, breaking loop"
+        )
+        return ok(drop_msg, logs=[{"level": "info", "message": drop_msg}])
+
     trust_level, reason = _determine_trust(raw_message_json, trusted_label_id)
 
     out_payload: TriagedPayload = {

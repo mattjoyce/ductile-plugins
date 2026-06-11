@@ -78,6 +78,75 @@ def test_emits_full_message_event_per_new_message(monkeypatch: pytest.MonkeyPatc
     assert "payload" in ev["payload"]["raw_message_json"]
 
 
+def test_self_reply_dropped_when_bot_address_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(plugin, "now_iso", lambda: "2026-05-10T06:00:00+00:00")
+    monkeypatch.setattr(
+        plugin,
+        "fetch_history",
+        lambda *a, **kw: (
+            [
+                {"id": "msg-bot", "threadId": "thr-1"},
+                {"id": "msg-human", "threadId": "thr-2"},
+            ],
+            "100100",
+        ),
+    )
+
+    def fake_full(_binary: str, msg_id: str) -> dict[str, object]:
+        from_value = (
+            "Splendid Bot <splendidupdating@gmail.com>"
+            if msg_id == "msg-bot"
+            else "Friend <friend@example.com>"
+        )
+        return {
+            "id": msg_id,
+            "threadId": "thr",
+            "labelIds": ["INBOX"],
+            "payload": {"headers": [{"name": "From", "value": from_value}]},
+        }
+
+    monkeypatch.setattr(plugin, "fetch_full_message", fake_full)
+
+    resp = cmd_poll(
+        {"bot_address": "splendidupdating@gmail.com"},
+        {"last_history_id": "100000", "history_reset_count": 0},
+    )
+
+    assert resp["status"] == "ok"
+    assert len(resp["events"]) == 1
+    assert resp["events"][0]["payload"]["message_id"] == "msg-human"
+    assert any("DROP msg-bot" in log["message"] for log in resp["logs"])
+    assert "1 self-reply(ies) dropped" in resp["result"]
+
+
+def test_self_reply_filter_disabled_when_bot_address_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(plugin, "now_iso", lambda: "2026-05-10T06:00:00+00:00")
+    monkeypatch.setattr(
+        plugin,
+        "fetch_history",
+        lambda *a, **kw: ([{"id": "msg-bot", "threadId": "thr"}], "100100"),
+    )
+    monkeypatch.setattr(
+        plugin,
+        "fetch_full_message",
+        lambda _b, _m: {
+            "id": "msg-bot",
+            "threadId": "thr",
+            "payload": {
+                "headers": [
+                    {"name": "From", "value": "Bot <splendidupdating@gmail.com>"},
+                ]
+            },
+        },
+    )
+
+    resp = cmd_poll({}, {"last_history_id": "100000", "history_reset_count": 0})
+
+    assert resp["status"] == "ok"
+    assert len(resp["events"]) == 1
+    assert resp["events"][0]["payload"]["message_id"] == "msg-bot"
+
+
 def test_no_messages_keeps_snapshot_shape_no_events(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(plugin, "now_iso", lambda: "2026-04-30T03:05:00+00:00")
     monkeypatch.setattr(plugin, "fetch_history", lambda *a, **kw: ([], "100050"))

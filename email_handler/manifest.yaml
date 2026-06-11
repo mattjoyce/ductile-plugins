@@ -1,10 +1,11 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: email_handler
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
-description: "Final stage of the ductile email pipeline. Handles email.process_decision events with decision='process'. Fetches full body via gws, loads prompt template from configured path (kept out of repo), dispatches to claude -p for action. Claude decides reply / bd task / ignore."
+concurrency_safe: false
+description: "Final stage of the ductile email pipeline. Handles email.process_decision events with decision='process'. Fetches full body via gws, loads prompt template from configured path (kept out of repo), dispatches to claude -p for action. Claude decides reply / bd task / ignore. concurrency_safe=false: claude -p invocations share the same working dir and contend on MCP startup; dispatcher serialises us."
 commands:
   - name: handle
     type: write
@@ -32,3 +33,5 @@ config_keys:
     - claude_working_dir
     - timeout_seconds
     - gws_fetch_timeout_seconds
+    - bot_address
+    - thread_context_messages

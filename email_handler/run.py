@@ -46,13 +46,15 @@ from typing import Any
 DEFAULT_GWS = "gws"
 DEFAULT_CLAUDE = "/Users/mattjoyce/.local/bin/claude"
 DEFAULT_CLAUDE_CWD = "/Users/mattjoyce/.claude"
-DEFAULT_TIMEOUT = 300
+DEFAULT_TIMEOUT = 600
 DEFAULT_GWS_FETCH_TIMEOUT = 30
+DEFAULT_THREAD_CONTEXT_MESSAGES = 5
 BODY_TRUNCATE_CHARS = 6000
 
 REQUIRED_PLACEHOLDERS = (
     "from_addr", "subject", "message_id",
     "trust_level", "pipeline_path", "score_summary", "body",
+    "attachments", "mime_summary", "thread_summary",
 )
 
 
@@ -116,9 +118,108 @@ def _extract_text(part: dict[str, Any], depth: int = 0) -> str:
     return ""
 
 
-def fetch_message(gws: str, message_id: str, timeout: int) -> tuple[str, str, str, str, list[dict]]:
-    """Fetch full message via gws. Returns (from_addr, subject, snippet, body_text, logs)."""
+def _walk_parts(part: dict[str, Any], depth: int = 0) -> list[dict[str, Any]]:
+    """Walk the Gmail MIME tree and return a flat list of leaf parts.
+
+    Each entry: {mime, filename, size, attachment_id, depth}. Multipart wrappers
+    are included with mime starting with "multipart/" so callers can render the
+    tree shape; leaf parts are everything else.
+    """
+    if depth > 10:
+        return []
+    mime = str(part.get("mimeType", "")).lower()
+    body = part.get("body", {}) if isinstance(part.get("body"), dict) else {}
+    entry = {
+        "mime": mime,
+        "filename": str(part.get("filename", "") or ""),
+        "size": int(body.get("size", 0) or 0),
+        "attachment_id": str(body.get("attachmentId", "") or ""),
+        "depth": depth,
+    }
+    out = [entry]
+    for sub in part.get("parts") or []:
+        out.extend(_walk_parts(sub, depth + 1))
+    return out
+
+
+def _format_size(n: int) -> str:
+    if n <= 0:
+        return "0B"
+    if n < 1024:
+        return f"{n}B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f}KB"
+    return f"{n / (1024 * 1024):.1f}MB"
+
+
+def _is_attachment(p: dict[str, Any]) -> bool:
+    """A part counts as an attachment if it has a filename or non-text/* mime."""
+    if p["mime"].startswith("multipart/"):
+        return False
+    if p["filename"]:
+        return True
+    if not p["mime"].startswith("text/"):
+        return True
+    return False
+
+
+def build_mime_summary(parts: list[dict[str, Any]]) -> str:
+    """Produce a one-line MIME tree summary.
+
+    Example: "multipart/alternative[text/plain, text/html] + application/pdf:McKinsey.pdf(214KB)"
+    """
+    if not parts:
+        return "(no parts)"
+    root = parts[0]
+    if not root["mime"].startswith("multipart/"):
+        # single-part message
+        if _is_attachment(root):
+            label = root["filename"] or "(unnamed)"
+            return f"{root['mime']}:{label}({_format_size(root['size'])})"
+        return root["mime"]
+
+    leaves_inside_root: list[str] = []
+    extras: list[str] = []
+    for p in parts[1:]:
+        if p["mime"].startswith("multipart/"):
+            continue
+        if p["depth"] == 1 and not _is_attachment(p):
+            leaves_inside_root.append(p["mime"])
+        elif _is_attachment(p):
+            label = p["filename"] or "(unnamed)"
+            extras.append(f"{p['mime']}:{label}({_format_size(p['size'])})")
+        else:
+            leaves_inside_root.append(p["mime"])
+    pieces = [f"{root['mime']}[{', '.join(leaves_inside_root)}]"] if leaves_inside_root else [root["mime"]]
+    pieces.extend(extras)
+    return " + ".join(pieces)
+
+
+def build_attachments_block(parts: list[dict[str, Any]]) -> str:
+    """List attachment metadata for the prompt.
+
+    One per line: "- filename (mime, size)". Returns "(none)" if there are none.
+    """
+    rows: list[str] = []
+    for p in parts:
+        if not _is_attachment(p):
+            continue
+        label = p["filename"] or "(unnamed)"
+        rows.append(f"- {label} ({p['mime']}, {_format_size(p['size'])})")
+    return "\n".join(rows) if rows else "(none)"
+
+
+def fetch_message(
+    gws: str, message_id: str, timeout: int
+) -> tuple[str, str, str, str, list[dict[str, Any]], str, list[dict]]:
+    """Fetch full message via gws.
+
+    Returns (from_addr, subject, snippet, body_text, parts, thread_id, logs).
+    body_text gets a truncation marker appended when truncated, so the prompt
+    is honest with claude about cut content.
+    """
     logs: list[dict] = []
+    empty_parts: list[dict[str, Any]] = []
     try:
         params = json.dumps({"userId": "me", "id": message_id, "format": "full"})
         result = subprocess.run(  # nosec B603
@@ -130,7 +231,7 @@ def fetch_message(gws: str, message_id: str, timeout: int) -> tuple[str, str, st
         if result.returncode != 0:
             msg = f"gws exited {result.returncode}: {result.stderr[:200]}"
             logs.append({"level": "warn", "message": msg})
-            return "", "", "", f"[fetch failed: {result.stderr[:100]}]", logs
+            return "", "", "", f"[fetch failed: {result.stderr[:100]}]", empty_parts, "", logs
 
         # gws writes keyring notices to stderr — parse stdout only
         stdout = result.stdout.strip()
@@ -143,28 +244,100 @@ def fetch_message(gws: str, message_id: str, timeout: int) -> tuple[str, str, st
             msg_json = json.loads(stdout)
         except json.JSONDecodeError:
             logs.append({"level": "warn", "message": "gws output is not valid JSON"})
-            return "", "", "", "[fetch failed: invalid JSON]", logs
+            return "", "", "", "[fetch failed: invalid JSON]", empty_parts, "", logs
 
-        headers = msg_json.get("payload", {}).get("headers") or []
+        payload_obj = msg_json.get("payload", {}) or {}
+        headers = payload_obj.get("headers") or []
         from_addr = _header(headers, "From")
         subject = _header(headers, "Subject")
         snippet = str(msg_json.get("snippet", "")).strip()
-        body_text = _extract_text(msg_json.get("payload", {}))
+        thread_id = str(msg_json.get("threadId", "") or "")
+        parts = _walk_parts(payload_obj)
+        body_text = _extract_text(payload_obj)
         if not body_text:
             body_text = snippet or "[no body text]"
 
-        truncated = len(body_text) > BODY_TRUNCATE_CHARS
-        body_text = body_text[:BODY_TRUNCATE_CHARS]
+        full_len = len(body_text)
+        truncated = full_len > BODY_TRUNCATE_CHARS
+        if truncated:
+            cut = body_text[:BODY_TRUNCATE_CHARS]
+            remaining = full_len - BODY_TRUNCATE_CHARS
+            body_text = (
+                f"{cut}\n\n[BODY TRUNCATED — {remaining} more chars not shown; "
+                f"use `gws gmail users messages get` with format=full to fetch the rest]"
+            )
         logs.append({
             "level": "debug",
             "message": f"fetched message: from={from_addr!r} subject={subject!r}"
-                       + (" [body truncated]" if truncated else ""),
+                       + (f" [body truncated, {full_len} chars total]" if truncated else "")
+                       + f" parts={len(parts)}",
         })
-        return from_addr, subject, snippet, body_text, logs
+        return from_addr, subject, snippet, body_text, parts, thread_id, logs
 
     except subprocess.TimeoutExpired:
         logs.append({"level": "warn", "message": f"gws fetch timed out after {timeout}s"})
-        return "", "", "", "[fetch timed out]", logs
+        return "", "", "", "[fetch timed out]", empty_parts, "", logs
+
+
+def fetch_thread_summary(
+    gws: str,
+    thread_id: str,
+    current_message_id: str,
+    max_messages: int,
+    timeout: int,
+) -> tuple[str, list[dict]]:
+    """Fetch thread metadata and produce a short prior-context summary.
+
+    Returns ("(none)", logs) when there's no prior context (single-message thread
+    or fetch failure). Otherwise a few lines like "From: X | Subject: Y | snippet…"
+    for up to max_messages preceding messages.
+    """
+    logs: list[dict] = []
+    if not thread_id or thread_id == current_message_id:
+        return "(none)", logs
+    try:
+        params = json.dumps({"userId": "me", "id": thread_id, "format": "metadata"})
+        result = subprocess.run(  # nosec B603
+            [gws, "gmail", "users", "threads", "get", "--params", params],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        logs.append({"level": "warn", "message": f"thread fetch timed out after {timeout}s"})
+        return "(unavailable: timeout)", logs
+
+    if result.returncode != 0:
+        logs.append({"level": "warn", "message": f"thread fetch exited {result.returncode}"})
+        return "(unavailable)", logs
+
+    stdout = result.stdout.strip()
+    brace = stdout.find("{")
+    if brace > 0:
+        stdout = stdout[brace:]
+    try:
+        thread_json = json.loads(stdout)
+    except json.JSONDecodeError:
+        logs.append({"level": "warn", "message": "thread fetch invalid JSON"})
+        return "(unavailable: bad json)", logs
+
+    messages = thread_json.get("messages") or []
+    rows: list[str] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        if str(msg.get("id", "")) == current_message_id:
+            continue
+        headers = (msg.get("payload", {}) or {}).get("headers") or []
+        sender = _header(headers, "From") or "(unknown)"
+        subj = _header(headers, "Subject") or "(no subject)"
+        snippet = str(msg.get("snippet", "")).strip()[:200]
+        rows.append(f"- From: {sender} | Subject: {subj}\n  {snippet}")
+    if not rows:
+        return "(none)", logs
+    rows = rows[-max_messages:]
+    logs.append({"level": "debug", "message": f"thread context: {len(rows)} prior messages"})
+    return "\n".join(rows), logs
 
 
 def load_prompt_template(path: str) -> str:
@@ -189,6 +362,9 @@ def build_prompt(
     pipeline_path: str,
     scores: dict[str, float],
     llm_score: float | None,
+    attachments: str,
+    mime_summary: str,
+    thread_summary: str,
 ) -> str:
     score_summary = (
         f"regex={scores.get('regex', 0):.2f}, "
@@ -205,6 +381,9 @@ def build_prompt(
         pipeline_path=pipeline_path,
         score_summary=score_summary,
         body=body,
+        attachments=attachments,
+        mime_summary=mime_summary,
+        thread_summary=thread_summary,
     )
 
 
@@ -240,6 +419,10 @@ def handle_email(req: dict[str, Any]) -> dict[str, Any]:
     cwd = str(config.get("claude_working_dir", DEFAULT_CLAUDE_CWD))
     timeout = int(config.get("timeout_seconds", DEFAULT_TIMEOUT))
     gws_timeout = int(config.get("gws_fetch_timeout_seconds", DEFAULT_GWS_FETCH_TIMEOUT))
+    bot_address = str(config.get("bot_address", "") or "").strip().lower()
+    thread_context_messages = int(
+        config.get("thread_context_messages", DEFAULT_THREAD_CONTEXT_MESSAGES)
+    )
 
     logs: list[dict] = [{"level": "info", "message": f"handling {message_id} trust={trust_level} path={pipeline_path}"}]
 
@@ -248,12 +431,35 @@ def handle_email(req: dict[str, Any]) -> dict[str, Any]:
     except (FileNotFoundError, ValueError) as exc:
         return plugin_error(str(exc), retry=False, logs=logs)
 
-    from_addr, subject, snippet, body, fetch_logs = fetch_message(gws, message_id, gws_timeout)
+    from_addr, subject, snippet, body, parts, thread_id, fetch_logs = fetch_message(
+        gws, message_id, gws_timeout
+    )
     logs.extend(fetch_logs)
+
+    # Self-reply guard (belt-and-braces — triage should already drop these).
+    if bot_address and from_addr:
+        from_lower = from_addr.lower()
+        if bot_address in from_lower:
+            logs.append({
+                "level": "info",
+                "message": f"self-reply detected (from={from_addr!r}); skipping claude",
+            })
+            return plugin_ok(
+                result=f"email {message_id} skipped (self-reply from {bot_address})",
+                logs=logs,
+            )
+
+    mime_summary = build_mime_summary(parts)
+    attachments = build_attachments_block(parts)
+    thread_summary, thread_logs = fetch_thread_summary(
+        gws, thread_id, message_id, thread_context_messages, gws_timeout
+    )
+    logs.extend(thread_logs)
 
     prompt = build_prompt(
         template, from_addr, subject, message_id, body,
         trust_level, pipeline_path, scores, llm_score,
+        attachments, mime_summary, thread_summary,
     )
 
     try:

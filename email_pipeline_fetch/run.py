@@ -19,11 +19,22 @@ Event emitted: gmail.new_full_message
   payload.thread_id         — Gmail thread ID
   payload.raw_message_json  — full Gmail Message resource JSON (format=full)
   dedupe_key                — gmail-full:msg:<message_id>
+
+Config keys (all optional):
+  gws_binary    (str)  — gws CLI path (default "gws")
+  label_filter  (str)  — Gmail label filter (default "INBOX")
+  max_per_poll  (int)  — max messages emitted per tick (default 20)
+  bot_address   (str)  — when the From header contains this string
+                          (case-insensitive), the message is the bot's own
+                          outgoing reply; drop it before emitting so the
+                          downstream pipeline never sees self-replies.
+                          Default: "" (disabled).
 """
 
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess  # nosec B404
 import sys
@@ -35,6 +46,8 @@ DEDUPE_PREFIX = "gmail-full:msg:"
 GMAIL_HISTORY_PAGE_CAP = 500
 CMD_POLL = "poll"
 CMD_HEALTH = "health"
+
+_EMAIL_RE = re.compile(r"<([^>]+)>")
 
 
 # ── protocol shapes ───────────────────────────────────────────────────────────
@@ -279,6 +292,30 @@ def fetch_history(
     return messages, latest_id
 
 
+def _extract_sender(raw_message_json: dict[str, Any]) -> str:
+    """Return the sender email address from the Gmail Message resource.
+
+    Mirrors email_pipeline_triage._extract_sender so self-reply detection
+    here matches downstream identity logic exactly. Returns empty string
+    when the From header is absent or unparseable.
+    """
+    try:
+        headers: list[dict[str, str]] = (
+            raw_message_json.get("payload", {}).get("headers") or []
+        )
+        for hdr in headers:
+            if isinstance(hdr, dict) and hdr.get("name", "").lower() == "from":
+                value = str(hdr.get("value", "")).strip()
+                m = _EMAIL_RE.search(value)
+                if m:
+                    return m.group(1).strip().lower()
+                if "@" in value:
+                    return value.lower()
+    except Exception:  # nosec B110
+        pass
+    return ""
+
+
 def fetch_full_message(binary: str, message_id: str) -> dict[str, Any]:
     """Fetch the complete Gmail Message resource (format=full).
 
@@ -312,6 +349,7 @@ def cmd_poll(config: dict[str, Any], state: dict[str, Any]) -> ResponseOk | Resp
     binary = str(config.get("gws_binary") or "gws")
     label_filter = str(config.get("label_filter") or "INBOX")
     max_per_poll = int(config.get("max_per_poll") or 20)
+    bot_address = str(config.get("bot_address") or "").strip().lower()
 
     last_history_id = state.get("last_history_id")
     history_reset_count = int(state.get("history_reset_count") or 0)
@@ -381,6 +419,7 @@ def cmd_poll(config: dict[str, Any], state: dict[str, Any]) -> ResponseOk | Resp
     # ── build events: fetch full message JSON for each new message ───────────
     events: list[FetchEvent] = []
     fetch_failures = 0
+    self_reply_drops = 0
 
     for msg in messages[:max_per_poll]:
         msg_id = msg.get("id")
@@ -398,6 +437,25 @@ def cmd_poll(config: dict[str, Any], state: dict[str, Any]) -> ResponseOk | Resp
             )
             continue
 
+        # Self-reply guard: drop the bot's own outgoing messages before they
+        # enter the pipeline. Filtering here (not in triage) keeps the pipeline
+        # contract clean — every gmail.new_full_message event is a real inbound
+        # message that all downstream stages must process.
+        if bot_address:
+            sender = _extract_sender(full)
+            if sender and bot_address in sender:
+                self_reply_drops += 1
+                logs.append(
+                    {
+                        "level": "info",
+                        "message": (
+                            f"DROP {msg_id}: address={sender} matches "
+                            f"bot_address={bot_address} — self-reply, not emitting"
+                        ),
+                    }
+                )
+                continue
+
         events.append(
             {
                 "type": EVENT_TYPE,
@@ -411,6 +469,8 @@ def cmd_poll(config: dict[str, Any], state: dict[str, Any]) -> ResponseOk | Resp
         )
 
     summary = f"Emitted {len(events)} {EVENT_TYPE} event(s)."
+    if self_reply_drops:
+        summary += f" {self_reply_drops} self-reply(ies) dropped."
     if fetch_failures:
         summary += f" {fetch_failures} full-fetch(es) failed (see logs)."
     logs.append({"level": "info", "message": summary})
