@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-09-06
+- New plugin `describe_image`: writes a `<image>.md` sidecar (YAML frontmatter + prose) describing an image via the Claude Messages API over raw HTTP (stdlib only). Consumes `folder_watch` per_file events, idempotent on the image sha256, removes the orphan sidecar on delete. Trusted-tier; key delivered from the vault as `anthropic-api-key`. First deployed on cachyos-b550 watching ~/Downloads.
+
 ## 2026-04-25
 - Sprint 13B fact migration: `birdnet_firstday` declares `birdnet_firstday.snapshot` as a `mirror_object` fact output for `poll`. The snapshot keeps `species_cache` and `species_cache_fetched_at` deliberately under protocol v2 limits; tracked as a v3 follow-up.
 - Sprint 13B fact migration: `sqlite_change` declares `sqlite_change.snapshot` as a `mirror_object` fact output for `poll`. The snapshot keeps `last_checked_at` and `last_triggered_at` as part of the compatibility contract.
