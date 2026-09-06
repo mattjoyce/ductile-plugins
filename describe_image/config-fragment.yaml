@@ -10,7 +10,10 @@ plugins:
     timeouts:
       poll: 60s
     schedules:
-      - every: 1m
+      # The scheduler ticks every 60s and computes next_run = last_run + interval, so
+      # `every: 1m` lands just after each tick and slips to every other tick (2 min).
+      # 30s keeps it due on every tick = one poll per minute.
+      - every: 30s
         command: poll
     config:
       watches:
@@ -22,8 +25,8 @@ plugins:
                           "*.JPG", "*.JPEG", "*.PNG", "*.GIF", "*.WEBP"]
           exclude_globs: ["*.md", "*.tmp"]
           emit_mode: per_file
-          emit_initial: false   # existing images are seeded by hand; flip to true to backfill via the API
-          min_stable_age: 90s   # skip files still being downloaded
+          emit_initial: true    # safe: describe_image skips images whose sidecar sha256 already matches
+          min_stable_age: 15s   # LocalSend/browser writes finish in seconds; keeps a fresh photo within ~1 min of describe
           strategy: mtime_size
 
   describe_image:

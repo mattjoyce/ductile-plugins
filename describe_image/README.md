@@ -38,11 +38,17 @@ The `sha256` line makes the plugin idempotent: a re-fired event for an unchanged
 | `effort` | `medium` | `output_config.effort` |
 | `max_tokens` | `4096` | response cap |
 | `prompt` | catalogue prompt | instruction sent with the image |
-| `max_image_bytes` | `5242880` | larger files are skipped (API limit) |
+| `max_image_bytes` | `7000000` | raw-byte cap; larger files are downscaled, skipped only if no encoding fits |
+| `max_edge` | `2576` | long-edge px cap (Opus 5 native limit); larger images are downscaled with Pillow |
+| `jpeg_quality` | `90` | JPEG quality for downscaled output |
 | `sidecar_suffix` | `.md` | appended to the full image filename |
 | `secret_name` | `anthropic-api-key` | key looked up in `request.secrets` |
 | `delete_orphans` | `true` | remove the sidecar when the image is deleted |
 | `timeout_seconds` | `120` | API timeout |
+
+## Oversized images
+
+Anything over `max_edge` px on its long side or `max_image_bytes` raw bytes is downscaled with Pillow before upload: EXIF rotation baked in, LANCZOS resize, PNG kept lossless when it fits, otherwise JPEG at `jpeg_quality` stepping down to 80 and 65. The sidecar's `sha256` is always of the original file. Without Pillow, oversized images emit `image.skipped` with reason `too_large`; `health` reports whether Pillow was found.
 
 ## Secrets
 

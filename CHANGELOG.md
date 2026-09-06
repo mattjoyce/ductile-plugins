@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-09-06
+- `describe_image` 0.2.0: oversized images are downscaled with Pillow (EXIF rotation baked in, long edge capped at `max_edge`, default 2576 = Opus 5 native) instead of skipped; raw-byte cap raised to 7 MB to match the API's 10 MB base64 limit; per-process temp file for the sidecar write; `health` reports Pillow availability. Recommended folder_watch config now polls with `every: 30s` (the 60s scheduler tick made `1m` fire every 2 min), `min_stable_age: 15s`, `emit_initial: true`.
 - New plugin `describe_image`: writes a `<image>.md` sidecar (YAML frontmatter + prose) describing an image via the Claude Messages API over raw HTTP (stdlib only). Consumes `folder_watch` per_file events, idempotent on the image sha256, removes the orphan sidecar on delete. Trusted-tier; key delivered from the vault as `anthropic-api-key`. First deployed on cachyos-b550 watching ~/Downloads.
 
 ## 2026-04-25

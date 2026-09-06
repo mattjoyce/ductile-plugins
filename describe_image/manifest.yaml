@@ -1,7 +1,7 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: describe_image
-version: 0.1.0
+version: 0.2.0
 protocol: 2
 entrypoint: run.py
 concurrency_safe: true
@@ -9,7 +9,7 @@ description: "Writes a Markdown sidecar (<image>.md, YAML frontmatter + prose) d
 commands:
   - name: handle
     type: write
-    description: "Describe one image. Reads payload.root + payload.path, hashes the file, skips if the sidecar's sha256 matches, otherwise base64-encodes the image, calls the Claude API with the configured model/effort/prompt, and atomically writes <image><sidecar_suffix>. Emits image.described, image.skipped (unchanged / unsupported_type / too_large) or image.orphan_removed."
+    description: "Describe one image. Reads payload.root + payload.path, hashes the file, skips if the sidecar's sha256 matches, otherwise base64-encodes the image, calls the Claude API with the configured model/effort/prompt, and atomically writes <image><sidecar_suffix>. Emits image.described, image.skipped (unchanged / unsupported_type / too_large_after_downscale) or image.orphan_removed."
     idempotent: true
     retry_safe: true
     input_schema:
@@ -52,7 +52,9 @@ config_keys:
     - effort            # low|medium|high|xhigh|max, default medium
     - max_tokens        # default 4096
     - prompt            # description prompt; default is a catalogue-oriented prompt
-    - max_image_bytes   # skip larger files, default 5242880 (API limit)
+    - max_image_bytes   # raw-byte cap, default 7000000; larger files are downscaled with Pillow, skipped if that fails
+    - max_edge          # long-edge px cap, default 2576 (Opus 5 native); larger images are downscaled
+    - jpeg_quality      # quality for downscaled JPEG output, default 90
     - sidecar_suffix    # default ".md" -> PXL_x.jpg.md
     - secret_name       # vault secret key in request.secrets, default anthropic-api-key
     - delete_orphans    # remove sidecar when the image is deleted, default true

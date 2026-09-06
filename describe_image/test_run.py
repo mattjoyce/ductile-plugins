@@ -37,6 +37,30 @@ def test_missing_secret(tmp: Path):
     assert r["status"] == "error" and "not delivered" in r["error"]
 
 
+def test_downscale(tmp: Path):
+    from PIL import Image
+    img = tmp / "big.jpg"
+    Image.new("RGB", (4000, 3000), (200, 120, 40)).save(img, "JPEG", quality=95)
+    seen = {}
+    def fake(api_key, model, effort, max_tokens, prompt, media_type, data_b64, timeout):
+        seen["media_type"] = media_type; seen["bytes"] = len(data_b64) * 3 // 4
+        return "An orange rectangle."
+    run.call_claude = fake
+    ev = {"payload": {"root": str(tmp), "path": "big.jpg", "change_type": "created"}}
+    r = run.handle({"max_edge": 1000}, ev, {"anthropic-api-key": "k"})
+    assert r["status"] == "ok", r
+    assert seen["media_type"] == "image/jpeg" and seen["bytes"] < img.stat().st_size
+    assert any("downscaled 4000x3000" in l["message"] for l in r["logs"]), r["logs"]
+    # sha in the sidecar is of the original file, so a re-fire is still a no-op
+    r = run.handle({"max_edge": 1000}, ev, {"anthropic-api-key": "k"})
+    assert r["events"][0]["payload"]["reason"] == "unchanged"
+    # byte cap that no encoding can meet -> skipped, no API call
+    run.call_claude = lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not call"))
+    (tmp / "big.jpg.md").unlink()
+    r = run.handle({"max_edge": 1000, "max_image_bytes": 10}, ev, {"anthropic-api-key": "k"})
+    assert r["events"][0]["payload"]["reason"] == "too_large_after_downscale", r
+
+
 def test_protocol_health():
     req = {"command": "health", "config": {}, "secrets": {"anthropic-api-key": "k"}}
     out = subprocess.run([sys.executable, str(HERE / "run.py")], input=json.dumps(req), capture_output=True, text=True, check=True)
@@ -48,5 +72,7 @@ if __name__ == "__main__":
         test_describe_skip_delete(Path(d))
     with tempfile.TemporaryDirectory() as d:
         test_missing_secret(Path(d))
+    with tempfile.TemporaryDirectory() as d:
+        test_downscale(Path(d))
     test_protocol_health()
     print("all tests passed")

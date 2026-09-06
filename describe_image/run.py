@@ -12,6 +12,9 @@ Input event (from folder_watch, emit_mode=per_file):
   payload.path        path relative to root
   payload.change_type created | modified | deleted
 
+Images larger than max_edge px or max_image_bytes are downscaled with Pillow
+(when installed) before upload; the sha256 in the sidecar is always of the original file.
+
 Output: <image>.md next to the image, YAML frontmatter + description body.
 Emits image.described (or image.skipped / image.orphan_removed).
 """
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
 import sys
@@ -29,6 +33,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from _response import emit, error, ok
+
+try:  # optional: only needed to downscale oversized images
+    from PIL import Image, ImageOps
+except ImportError:  # pragma: no cover
+    Image = ImageOps = None
 
 API_URL = "https://api.anthropic.com/v1/messages"
 API_VERSION = "2023-06-01"
@@ -54,7 +63,9 @@ DEFAULTS = {
     "model": "claude-opus-5",
     "effort": "medium",
     "max_tokens": 4096,
-    "max_image_bytes": 5 * 1024 * 1024,
+    "max_image_bytes": 7_000_000,   # raw bytes; base64 of this stays under the API's 10 MB cap
+    "max_edge": 2576,               # Opus 5 native long-edge limit; larger is downscaled server-side anyway
+    "jpeg_quality": 90,
     "sidecar_suffix": ".md",
     "secret_name": "anthropic-api-key",
     "delete_orphans": True,
@@ -111,9 +122,59 @@ def write_sidecar(sidecar: Path, meta: dict, body: str) -> None:
     lines.append("")
     lines.append(body.strip())
     lines.append("")
-    tmp = sidecar.with_name(sidecar.name + ".tmp")
+    tmp = sidecar.with_name(f"{sidecar.name}.{os.getpid()}.tmp")
     tmp.write_text("\n".join(lines), encoding="utf-8")
     os.replace(tmp, sidecar)
+
+
+def image_dimensions(image: Path):
+    if Image is None:
+        return None
+    try:
+        with Image.open(image) as im:
+            return im.size
+    except Exception:
+        return None
+
+
+def prepare_image(image: Path, media_type: str, max_bytes: int, max_edge: int, quality: int):
+    """Return (media_type, bytes, note). Downscale with Pillow when the file exceeds
+    max_bytes or its long edge exceeds max_edge; otherwise send the file as-is.
+    note is None when untouched, a description when downscaled, or a skip reason
+    when the image cannot be made to fit."""
+    size = image.stat().st_size
+    dims = image_dimensions(image)
+    too_big = size > max_bytes
+    too_wide = bool(dims) and max_edge > 0 and max(dims) > max_edge
+    if not (too_big or too_wide):
+        return media_type, image.read_bytes(), None
+    if Image is None or dims is None:
+        return None, None, "too_large" if too_big else "unreadable"
+
+    with Image.open(image) as im:
+        im = ImageOps.exif_transpose(im)  # phone photos: bake the rotation in
+        im.thumbnail((max_edge, max_edge), Image.LANCZOS)
+        if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+            rgba = im.convert("RGBA")
+            flat = Image.new("RGB", rgba.size, (255, 255, 255))
+            flat.paste(rgba, mask=rgba.split()[-1])
+            im = flat
+        elif im.mode != "RGB":
+            im = im.convert("RGB")
+        attempts = []
+        if media_type == "image/png":  # keep line art / screenshots lossless if they fit
+            attempts.append(("image/png", "PNG", {"optimize": True}))
+        for q in (quality, 80, 65):
+            attempts.append(("image/jpeg", "JPEG", {"quality": q, "optimize": True}))
+        for out_type, fmt, kwargs in attempts:
+            buf = io.BytesIO()
+            im.save(buf, fmt, **kwargs)
+            data = buf.getvalue()
+            if len(data) <= max_bytes:
+                note = (f"downscaled {dims[0]}x{dims[1]} ({size} B) -> "
+                        f"{im.size[0]}x{im.size[1]} {fmt} ({len(data)} B)")
+                return out_type, data, note
+    return None, None, "too_large_after_downscale"
 
 
 def call_claude(api_key: str, model: str, effort: str, max_tokens: int,
@@ -186,11 +247,6 @@ def handle(config: dict, event: dict, secrets: dict) -> dict:
         return error(f"image not found: {image}", retry=False)
 
     size = image.stat().st_size
-    max_bytes = int(cfg(config, "max_image_bytes"))
-    if size > max_bytes:
-        return ok(result=f"skipped {image.name}: {size} bytes exceeds max_image_bytes={max_bytes}",
-                  events=[{"type": "image.skipped", "payload": {"path": str(image), "reason": "too_large", "size": size}}])
-
     digest = sha256_of(image)
     existing = read_frontmatter(sidecar)
     if existing.get("sha256") == digest:
@@ -201,12 +257,21 @@ def handle(config: dict, event: dict, secrets: dict) -> dict:
     if not api_key:
         return error(f"secret {cfg(config, 'secret_name')!r} not delivered", retry=False)
 
-    data_b64 = base64.standard_b64encode(image.read_bytes()).decode("ascii")
+    send_type, data, note = prepare_image(
+        image, media_type, int(cfg(config, "max_image_bytes")),
+        int(cfg(config, "max_edge")), int(cfg(config, "jpeg_quality")),
+    )
+    if data is None:
+        return ok(result=f"skipped {image.name}: {note}",
+                  events=[{"type": "image.skipped", "payload": {"path": str(image), "reason": note, "size": size}}])
+    if note:
+        logs.append({"level": "info", "message": f"{image.name}: {note}"})
+    data_b64 = base64.standard_b64encode(data).decode("ascii")
     model = str(cfg(config, "model"))
     try:
         description = call_claude(
             api_key, model, str(cfg(config, "effort")), int(cfg(config, "max_tokens")),
-            str(cfg(config, "prompt")), media_type, data_b64, int(cfg(config, "timeout_seconds")),
+            str(cfg(config, "prompt")), send_type, data_b64, int(cfg(config, "timeout_seconds")),
         )
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:500]
@@ -246,7 +311,8 @@ def health(config: dict, secrets: dict) -> dict:
         problems.append(f"secret {cfg(config, 'secret_name')!r} not delivered")
     if problems:
         return error("; ".join(problems), retry=False)
-    return ok(result=f"describe_image OK (model={cfg(config, 'model')})",
+    pillow = "pillow=yes" if Image is not None else "pillow=no (oversized images will be skipped)"
+    return ok(result=f"describe_image OK (model={cfg(config, 'model')}, {pillow})",
               logs=[{"level": "info", "message": "healthy"}])
 
 
