@@ -1,0 +1,49 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: owntracks
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+concurrency_safe: false
+description: "Pulls OwnTracks points from an edge buffer (an HTTP export of rows after a cursor, bearer token) and appends them raw to a local spool, <spool_dir>/<device>/<YYYY-MM>.jsonl, the source of record. The cursor is the highest buffer id already in the spool, not plugin state, so retries and crashes neither skip nor duplicate rows. Emits location.new_data when rows arrive. Positions stay in the spool: events, logs and state carry counts and ids only."
+commands:
+  - name: poll
+    type: write
+    description: "Pull every row after the spool's cursor, a page at a time up to max_pages, appending each page durably before fetching the next. Emits location.new_data with counts, ids, devices and the spool files touched when any row arrived; nothing when the buffer had none."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume: []
+      emit:
+        - event: location.new_data
+          values:
+            - payload.source
+            - payload.rows
+            - payload.types
+            - payload.first_id
+            - payload.last_id
+            - payload.devices
+            - payload.files
+            - payload.received_from
+            - payload.received_to
+            - payload.backlog
+            - payload.detected_at
+  - name: health
+    type: read
+    description: "Report whether the spool is writable, its cursor and file count, and whether the buffer answers the pull token and has rows waiting. Fetches at most one row and reports only whether it exists."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume: []
+      emit:
+        - event: owntracks.health
+          values:
+            - payload.healthy
+            - payload.checked_at
+            - payload.spool
+            - payload.buffer
+config_keys:
+  # The pull token is vault-native: grant the `owntracks_pull_token` secret to this
+  # plugin; it arrives over stdin in `secrets`, never in config.
+  required: [export_url, spool_dir]
+  optional: [page_limit, max_pages, request_timeout_seconds]
