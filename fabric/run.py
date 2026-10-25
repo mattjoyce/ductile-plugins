@@ -10,6 +10,8 @@ Opt-in additions (0.3.0), each off unless configured or sent:
   to start without a ~/.config/fabric/.env, so an empty one is created in FABRIC_HOME.
 - FABRIC_RAW: pass --raw, for OpenAI-compatible servers that mishandle chat options.
 - FABRIC_TIMEOUT_SECONDS: how long one run may take (default 120).
+- FABRIC_FILE_ROOT: the one folder input_file and output_file may name a file under.
+  Without it both are refused, since a path in an event could otherwise point anywhere.
 - payload.input_file: read the input text from a file, not the event.
 - payload.output_format "json" (or FABRIC_OUTPUT_FORMAT): the output must be one JSON
   value; a surrounding Markdown code fence is removed, and the value is emitted as
@@ -19,6 +21,7 @@ Opt-in additions (0.3.0), each off unless configured or sent:
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -66,6 +69,18 @@ def parse_json_output(output):
     return json.loads(text)
 
 
+def confine(path, root):
+    """path resolved, and refused unless it lies under root. Symlinks are resolved first,
+    so a link cannot lead out of root."""
+    if not root:
+        raise ValueError("set FABRIC_FILE_ROOT to use input_file or output_file")
+    real_root = os.path.realpath(str(root))
+    real = os.path.realpath(os.path.join(real_root, str(path)))
+    if os.path.commonpath([real_root, real]) != real_root or real == real_root:
+        raise ValueError(f"{path} is outside FABRIC_FILE_ROOT")
+    return real
+
+
 def write_atomic(path, text):
     folder = os.path.dirname(os.path.abspath(path))
     fd, tmp = tempfile.mkstemp(prefix=".fabric-", dir=folder)
@@ -82,11 +97,17 @@ def write_atomic(path, text):
 
 
 def read_input_file(path, limit):
-    size = os.path.getsize(path)
-    if size > limit:
-        raise ValueError(f"input_file is {size} bytes, over the {limit} limit")
-    with open(path, encoding="utf-8", errors="replace") as fh:
-        return fh.read()
+    """At most limit bytes of a regular file. Opened without following a final symlink
+    and without blocking, then checked on the open descriptor, so a FIFO, device or
+    swapped-in link cannot stall or redirect the read."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise ValueError("input_file is not a regular file")
+        data = fh.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f"input_file is over the {limit} byte limit")
+    return data.decode("utf-8", errors="replace")
 
 
 def pick(payload, context, key, default=None):
@@ -127,9 +148,15 @@ def handle_command(config, state, event, context):
         return error_response(f"Bad fabric config: {exc}")
     if timeout < 1 or max_input < 1:
         return error_response("FABRIC_TIMEOUT_SECONDS and FABRIC_MAX_INPUT_BYTES must be at least 1")
-    if input_file and not text:
+    file_root = config.get("FABRIC_FILE_ROOT")
+    try:
+        input_path = confine(input_file, file_root) if input_file else None
+        output_path = confine(output_file, file_root) if output_file else None
+    except ValueError as exc:
+        return error_response(f"Refused file path: {exc}")
+    if input_path and not text:
         try:
-            text = read_input_file(str(input_file), max_input)
+            text = read_input_file(input_path, max_input)
         except (OSError, ValueError) as exc:
             return error_response(f"Cannot read input_file: {exc}")
     url = pick(payload, context, "url")
@@ -216,7 +243,7 @@ def handle_command(config, state, event, context):
     if output_file:
         try:
             body = json.dumps(data, indent=2, ensure_ascii=False) + "\n" if output_format == "json" else output + "\n"
-            write_atomic(str(output_file), body)
+            write_atomic(output_path, body)
         except OSError as exc:
             return error_response(f"Cannot write output_file: {exc}", retry=True)
     executions_count = state.get("executions_count", 0) + 1

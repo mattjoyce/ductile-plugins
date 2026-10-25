@@ -77,10 +77,10 @@ commands:
           description: "Pipeline-context field, forwarded into the fabric.completed event payload."
         input_file:
           type: string
-          description: "Path of a UTF-8 text file to use as the input when text is absent. Refused over FABRIC_MAX_INPUT_BYTES."
+          description: "Path, under config.FABRIC_FILE_ROOT, of a regular UTF-8 text file to use as the input when text is absent. Refused without that root, outside it, or over FABRIC_MAX_INPUT_BYTES."
         output_file:
           type: string
-          description: "Path to also write the output to, atomically. JSON output is written pretty-printed."
+          description: "Path, under config.FABRIC_FILE_ROOT, to also write the output to, atomically. Refused without that root or outside it."
         output_format:
           type: string
           enum: [text, json]
@@ -207,3 +207,4 @@ config_keys:
     - FABRIC_TIMEOUT_SECONDS
     - FABRIC_MAX_INPUT_BYTES
     - FABRIC_OUTPUT_FORMAT
+    - FABRIC_FILE_ROOT

@@ -24,6 +24,7 @@ All optional:
 | `FABRIC_TIMEOUT_SECONDS` | 120 | How long one run may take. A local model loading from cold needs more |
 | `FABRIC_MAX_INPUT_BYTES` | 1000000 | Largest `input_file` accepted |
 | `FABRIC_OUTPUT_FORMAT` | `text` | `json` makes every run's output parse as JSON (see below) |
+| `FABRIC_FILE_ROOT` | — | The only folder `input_file` and `output_file` may name a file under. Unset, both are refused: a path arriving in an event could otherwise read or overwrite anything the gateway can |
 
 ## Input (`handle`)
 
@@ -37,9 +38,9 @@ Payload fields (all optional, but at least one of `text`/`url`/`youtube_url`/`pr
 | `pattern` | Named fabric pattern (overrides `config.FABRIC_DEFAULT_PATTERN`) |
 | `prompt` | Freeform prompt; prepended to text input, or used alone in prompt-only mode |
 | `model` | Model override (overrides `config.FABRIC_DEFAULT_MODEL`) |
-| `input_file` | Path of a UTF-8 text file used as the input when `text` is absent |
+| `input_file` | Path under `FABRIC_FILE_ROOT` (relative to it, or absolute inside it) of a regular UTF-8 text file used as the input when `text` is absent. Symlinks are resolved before the check; FIFOs and devices are refused; at most `FABRIC_MAX_INPUT_BYTES` is read |
 | `output_format` | `text` (default) or `json`: the output must be one JSON value; a surrounding Markdown code fence is removed and the value is emitted as `data`. Output that is not JSON fails the run, with retry |
-| `output_file` | Also write the output to this path, atomically (JSON pretty-printed) |
+| `output_file` | Path under `FABRIC_FILE_ROOT` to also write the output to, atomically (JSON pretty-printed) |
 | `output_dir` / `output_path` / `filename` / `file_path` / `folder` | Pipeline-context fields, forwarded into the `fabric.completed` event payload for downstream steps |
 
 ## Events
@@ -77,6 +78,7 @@ plugins:
       FABRIC_TIMEOUT_SECONDS: 180
       FABRIC_OUTPUT_FORMAT: json
       FABRIC_HOME: /app/data/fabric-home
+      FABRIC_FILE_ROOT: /app/data/agentmail-work
       FABRIC_ENV:
         DEFAULT_VENDOR: OpenAI
         OPENAI_API_KEY: not-needed

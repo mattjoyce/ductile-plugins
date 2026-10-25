@@ -42,7 +42,7 @@ class Base(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_handle(self, payload, **config):
-        cfg = {"FABRIC_BIN_PATH": str(self.bin)}
+        cfg = {"FABRIC_BIN_PATH": str(self.bin), "FABRIC_FILE_ROOT": str(self.dir)}
         cfg.update(config)
         return handle_command(cfg, {}, {"payload": payload}, {})
 
@@ -120,6 +120,45 @@ class NewOptions(Base):
         self.assertEqual(out["status"], "ok")
         self.assertEqual(json.loads(target.read_text()), {"a": 1})
         self.assertEqual([p.name for p in self.dir.iterdir() if p.name.startswith(".fabric-")], [])
+
+    def test_files_refused_without_root(self) -> None:
+        f = self.dir / "in.txt"
+        f.write_text("x")
+        out = handle_command({"FABRIC_BIN_PATH": str(self.bin)}, {}, {"payload": {"input_file": str(f)}}, {})
+        self.assertEqual(out["status"], "error")
+        self.assertIn("FABRIC_FILE_ROOT", out["error"])
+
+    def test_paths_outside_root_refused(self) -> None:
+        for bad in ("/etc/hosts", "../outside.txt", "sub/../../outside.txt"):
+            out = self.run_handle({"input_file": bad})
+            self.assertEqual(out["status"], "error", bad)
+            self.assertIn("outside", out["error"])
+        out = self.run_handle({"text": "x", "output_file": "/tmp/fabric-escape.txt"})
+        self.assertEqual(out["status"], "error")
+        self.assertFalse(Path("/tmp/fabric-escape.txt").exists())
+
+    def test_symlink_out_of_root_refused(self) -> None:
+        outside = tempfile.NamedTemporaryFile(delete=False)
+        outside.write(b"secret")
+        outside.close()
+        try:
+            (self.dir / "link.txt").symlink_to(outside.name)
+            out = self.run_handle({"input_file": "link.txt"})
+            self.assertEqual(out["status"], "error")
+        finally:
+            os.unlink(outside.name)
+
+    def test_fifo_refused_without_blocking(self) -> None:
+        os.mkfifo(self.dir / "pipe")
+        out = self.run_handle({"input_file": "pipe"})
+        self.assertEqual(out["status"], "error")
+        self.assertIn("regular file", out["error"])
+
+    def test_relative_paths_are_under_root(self) -> None:
+        (self.dir / "sub").mkdir()
+        (self.dir / "sub" / "in.txt").write_text("rel")
+        out = self.run_handle({"input_file": "sub/in.txt"})
+        self.assertEqual(json.loads(out["events"][0]["payload"]["result"])["stdin"], "rel")
 
     def test_bad_output_format(self) -> None:
         out = self.run_handle({"text": "x", "output_format": "yaml"})
