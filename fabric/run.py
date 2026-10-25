@@ -2,12 +2,91 @@
 """Fabric AI wrapper plugin for Ductile Gateway.
 
 Wraps the fabric CLI tool to process text through predefined patterns.
-Protocol v1: reads JSON from stdin, writes JSON to stdout.
+Protocol v2: reads JSON from stdin, writes JSON to stdout.
+
+Opt-in additions (0.3.0), each off unless configured or sent:
+- FABRIC_ENV / FABRIC_HOME: run fabric with its settings from config, not a file in
+  the gateway's home. fabric reads its vendor settings from the environment, but refuses
+  to start without a ~/.config/fabric/.env, so an empty one is created in FABRIC_HOME.
+- FABRIC_RAW: pass --raw, for OpenAI-compatible servers that mishandle chat options.
+- FABRIC_TIMEOUT_SECONDS: how long one run may take (default 120).
+- payload.input_file: read the input text from a file, not the event.
+- payload.output_format "json" (or FABRIC_OUTPUT_FORMAT): the output must be one JSON
+  value; a surrounding Markdown code fence is removed, and the value is emitted as
+  payload.data. Output that is not JSON fails the run.
+- payload.output_file: also write the output there, whole or not at all.
 """
 import json
+import os
+import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
+
+# A run fails fast rather than hanging; 120 s was the fixed limit before it was a key.
+DEFAULT_TIMEOUT_SECONDS = 120
+# An input file larger than this is refused rather than sent to a model whole.
+DEFAULT_MAX_INPUT_BYTES = 1_000_000
+# One fenced block, optionally labelled (```json), around the whole output.
+_FENCE = re.compile(r"^```[A-Za-z0-9_-]*[ \t]*\n(.*?)\n?```$", re.DOTALL)
+
+
+def as_bool(value):
+    return value is True or str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def fabric_env(config):
+    """The environment fabric runs in: the gateway's, plus FABRIC_ENV, with HOME set to
+    FABRIC_HOME when given. Returns None to inherit the gateway's unchanged."""
+    extra = config.get("FABRIC_ENV")
+    home = config.get("FABRIC_HOME")
+    if not extra and not home:
+        return None
+    if extra is not None and not isinstance(extra, dict):
+        raise ValueError("FABRIC_ENV must be a map of variable names to values")
+    env = dict(os.environ)
+    for key, value in (extra or {}).items():
+        env[str(key)] = "" if value is None else str(value)
+    if home:
+        env["HOME"] = str(home)
+        settings = os.path.join(str(home), ".config", "fabric", ".env")
+        if not os.path.exists(settings):
+            os.makedirs(os.path.dirname(settings), exist_ok=True)
+            open(settings, "a").close()
+    return env
+
+
+def parse_json_output(output):
+    """The model's output as a JSON value, a surrounding code fence removed."""
+    text = output.strip()
+    fenced = _FENCE.match(text)
+    if fenced:
+        text = fenced.group(1).strip()
+    return json.loads(text)
+
+
+def write_atomic(path, text):
+    folder = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(prefix=".fabric-", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def read_input_file(path, limit):
+    size = os.path.getsize(path)
+    if size > limit:
+        raise ValueError(f"input_file is {size} bytes, over the {limit} limit")
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
 
 
 def pick(payload, context, key, default=None):
@@ -35,6 +114,24 @@ def handle_command(config, state, event, context):
 
     # Extract input parameters (payload first, context fallback)
     text = pick(payload, context, "text") or pick(payload, context, "content")
+    input_file = pick(payload, context, "input_file")
+    output_file = pick(payload, context, "output_file")
+    output_format = str(pick(payload, context, "output_format") or config.get("FABRIC_OUTPUT_FORMAT") or "text").lower()
+    if output_format not in ("text", "json"):
+        return error_response(f"output_format must be text or json, not {output_format!r}")
+    try:
+        timeout = int(config.get("FABRIC_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
+        max_input = int(config.get("FABRIC_MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES))
+        env = fabric_env(config)
+    except (TypeError, ValueError, OSError) as exc:
+        return error_response(f"Bad fabric config: {exc}")
+    if timeout < 1 or max_input < 1:
+        return error_response("FABRIC_TIMEOUT_SECONDS and FABRIC_MAX_INPUT_BYTES must be at least 1")
+    if input_file and not text:
+        try:
+            text = read_input_file(str(input_file), max_input)
+        except (OSError, ValueError) as exc:
+            return error_response(f"Cannot read input_file: {exc}")
     url = pick(payload, context, "url")
     youtube_url = pick(payload, context, "youtube_url")
 
@@ -68,6 +165,8 @@ def handle_command(config, state, event, context):
         cmd.extend(["--scrape_url", url])
     if youtube_url:
         cmd.extend(["--youtube", youtube_url])
+    if as_bool(config.get("FABRIC_RAW")):
+        cmd.append("--raw")
 
     # Prepare input text
     # If using URL/YouTube, fabric fetches content automatically
@@ -90,7 +189,8 @@ def handle_command(config, state, event, context):
             input=input_text,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
+            env=env,
         )
     except FileNotFoundError:
         return error_response(
@@ -99,13 +199,26 @@ def handle_command(config, state, event, context):
             retry=False,
         )
     except subprocess.TimeoutExpired:
-        return error_response("Fabric execution timed out after 120s", retry=True)
+        return error_response(f"Fabric execution timed out after {timeout}s", retry=True)
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
         return error_response(f"Fabric failed (exit {result.returncode}): {stderr}", retry=True)
 
     output = result.stdout.strip()
+    data = None
+    if output_format == "json":
+        try:
+            data = parse_json_output(output)
+        except ValueError as exc:
+            # A model may answer differently next time, so this is worth a retry.
+            return error_response(f"Fabric output is not JSON: {exc}", retry=True)
+    if output_file:
+        try:
+            body = json.dumps(data, indent=2, ensure_ascii=False) + "\n" if output_format == "json" else output + "\n"
+            write_atomic(str(output_file), body)
+        except OSError as exc:
+            return error_response(f"Cannot write output_file: {exc}", retry=True)
     executions_count = state.get("executions_count", 0) + 1
 
     # Build event payload with fabric results
@@ -119,10 +232,16 @@ def handle_command(config, state, event, context):
         "input_length": len(text) if text else 0,
         "output_length": len(output),
     }
+    if output_format == "json":
+        event_payload["data"] = data
+    if input_file:
+        event_payload["input_file"] = input_file
+    if output_file:
+        event_payload["output_file"] = output_file
 
     # Propagate pipeline context fields for downstream steps
     # (e.g., output_dir, output_path, filename from upstream plugins)
-    for field in ["output_dir", "output_path", "filename", "file_path"]:
+    for field in ["output_dir", "output_path", "filename", "file_path", "folder"]:
         value = pick(payload, context, field)
         if value is not None and value != "":
             event_payload[field] = value
@@ -154,6 +273,10 @@ def handle_command(config, state, event, context):
 
 def health_command(config):
     fabric_bin = config.get("FABRIC_BIN_PATH", "fabric")
+    try:
+        env = fabric_env(config)
+    except (TypeError, ValueError, OSError) as exc:
+        return error_response(f"Bad fabric config: {exc}")
 
     try:
         result = subprocess.run(
@@ -161,6 +284,7 @@ def health_command(config):
             capture_output=True,
             text=True,
             timeout=10,
+            env=env,
         )
     except FileNotFoundError:
         return error_response(
@@ -182,6 +306,7 @@ def health_command(config):
             capture_output=True,
             text=True,
             timeout=10,
+            env=env,
         )
         if list_result.returncode == 0:
             pattern_count = len([line for line in list_result.stdout.strip().splitlines() if line.strip()])

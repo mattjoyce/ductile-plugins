@@ -1,11 +1,11 @@
 manifest_spec: ductile.plugin
 manifest_version: 1
 name: fabric
-version: 0.2.0
+version: 0.3.0
 protocol: 2
 entrypoint: run.py
 concurrency_safe: false
-description: "Wrapper for the fabric AI pattern CLI (github.com/danielmiessler/fabric). Routes inbound text / URLs / YouTube links through a chosen pattern (or freeform prompt) and emits the result as fabric.completed. Stateful — maintains a running executions_count and last_run/last_pattern/last_prompt snapshot via fact_outputs. Serial-only: every invocation shells out to fabric with a 120s timeout; concurrent runs would contend for the fabric process and any pattern-specific model state."
+description: "Wrapper for the fabric AI pattern CLI (github.com/danielmiessler/fabric). Routes inbound text / URLs / YouTube links through a chosen pattern (or freeform prompt) and emits the result as fabric.completed. Stateful — maintains a running executions_count and last_run/last_pattern/last_prompt snapshot via fact_outputs. Serial-only: every invocation shells out to fabric with a timeout (FABRIC_TIMEOUT_SECONDS, default 120s); concurrent runs would contend for the fabric process and any pattern-specific model state."
 commands:
   - name: poll
     type: write
@@ -33,7 +33,7 @@ commands:
       emit: []
   - name: handle
     type: write
-    description: "Run one fabric invocation. Composes input from payload.text or payload.content (optionally with a payload.prompt prefix); falls back to URL fetching via fabric's --scrape_url for payload.url or --youtube for payload.youtube_url. Pattern resolution: payload.pattern wins; else config.FABRIC_DEFAULT_PATTERN (unless in prompt-only mode). 120s subprocess timeout. Emits fabric.completed with the captured output and metadata; propagates downstream pipeline fields (output_dir, output_path, filename, file_path) into the event payload."
+    description: "Run one fabric invocation. Composes input from payload.text or payload.content (optionally with a payload.prompt prefix); falls back to URL fetching via fabric's --scrape_url for payload.url or --youtube for payload.youtube_url. Pattern resolution: payload.pattern wins; else config.FABRIC_DEFAULT_PATTERN (unless in prompt-only mode). 120s subprocess timeout. Emits fabric.completed with the captured output and metadata; propagates downstream pipeline fields (output_dir, output_path, filename, file_path, folder) into the event payload. Opt-in: payload.input_file reads the input from a file; output_format json requires one JSON value (a code fence is stripped) and emits it as payload.data; payload.output_file also writes the output there atomically."
     idempotent: false
     retry_safe: true
     input_schema:
@@ -72,6 +72,19 @@ commands:
         file_path:
           type: string
           description: "Pipeline-context field, forwarded into the fabric.completed event payload."
+        folder:
+          type: string
+          description: "Pipeline-context field, forwarded into the fabric.completed event payload."
+        input_file:
+          type: string
+          description: "Path of a UTF-8 text file to use as the input when text is absent. Refused over FABRIC_MAX_INPUT_BYTES."
+        output_file:
+          type: string
+          description: "Path to also write the output to, atomically. JSON output is written pretty-printed."
+        output_format:
+          type: string
+          enum: [text, json]
+          description: "json: the output must be one JSON value, a surrounding code fence removed; emitted as payload.data. Falls back to config.FABRIC_OUTPUT_FORMAT, then text."
       additionalProperties: true
     output_schema:
       type: object
@@ -126,6 +139,10 @@ commands:
         - payload.output_path
         - payload.filename
         - payload.file_path
+        - payload.folder
+        - payload.input_file
+        - payload.output_file
+        - payload.output_format
       emit:
         - event: fabric.completed
           values:
@@ -141,6 +158,10 @@ commands:
             - payload.output_path
             - payload.filename
             - payload.file_path
+            - payload.folder
+            - payload.data
+            - payload.input_file
+            - payload.output_file
   - name: health
     type: read
     description: "Verify the fabric binary is callable and report the count of available patterns (via `fabric --listpatterns`). Does not invoke an actual pattern."
@@ -180,3 +201,9 @@ config_keys:
     - FABRIC_DEFAULT_MODEL
     - FABRIC_DEFAULT_PATTERN
     - FABRIC_DEFAULT_PROMPT
+    - FABRIC_ENV
+    - FABRIC_HOME
+    - FABRIC_RAW
+    - FABRIC_TIMEOUT_SECONDS
+    - FABRIC_MAX_INPUT_BYTES
+    - FABRIC_OUTPUT_FORMAT

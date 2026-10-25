@@ -18,6 +18,12 @@ All optional:
 | `FABRIC_DEFAULT_PATTERN` | — | Pattern used when `payload.pattern` is absent and not in prompt-only mode |
 | `FABRIC_DEFAULT_PROMPT` | — | Prompt used when `payload.prompt` is absent |
 | `FABRIC_DEFAULT_MODEL` | — | Model used when `payload.model` is absent |
+| `FABRIC_ENV` | — | Map of environment variables for fabric, e.g. `DEFAULT_VENDOR`, `OPENAI_API_BASE_URL`, `CUSTOM_PATTERNS_DIRECTORY`. Settings only: secrets belong in the vault |
+| `FABRIC_HOME` | the gateway's `HOME` | `HOME` for fabric. fabric will not start without `~/.config/fabric/.env`, so an empty one is created here; with `FABRIC_ENV` that is all the setup fabric needs |
+| `FABRIC_RAW` | false | Pass `--raw`. Needed for some OpenAI-compatible servers (llama-swap), which otherwise answer the wrong question |
+| `FABRIC_TIMEOUT_SECONDS` | 120 | How long one run may take. A local model loading from cold needs more |
+| `FABRIC_MAX_INPUT_BYTES` | 1000000 | Largest `input_file` accepted |
+| `FABRIC_OUTPUT_FORMAT` | `text` | `json` makes every run's output parse as JSON (see below) |
 
 ## Input (`handle`)
 
@@ -31,11 +37,14 @@ Payload fields (all optional, but at least one of `text`/`url`/`youtube_url`/`pr
 | `pattern` | Named fabric pattern (overrides `config.FABRIC_DEFAULT_PATTERN`) |
 | `prompt` | Freeform prompt; prepended to text input, or used alone in prompt-only mode |
 | `model` | Model override (overrides `config.FABRIC_DEFAULT_MODEL`) |
-| `output_dir` / `output_path` / `filename` / `file_path` | Pipeline-context fields, forwarded into the `fabric.completed` event payload for downstream steps |
+| `input_file` | Path of a UTF-8 text file used as the input when `text` is absent |
+| `output_format` | `text` (default) or `json`: the output must be one JSON value; a surrounding Markdown code fence is removed and the value is emitted as `data`. Output that is not JSON fails the run, with retry |
+| `output_file` | Also write the output to this path, atomically (JSON pretty-printed) |
+| `output_dir` / `output_path` / `filename` / `file_path` / `folder` | Pipeline-context fields, forwarded into the `fabric.completed` event payload for downstream steps |
 
 ## Events
 
-Emits `fabric.completed` with payload: `result`, `pattern`, `prompt`, `model`, `url`, `youtube_url`, `input_length`, `output_length`, plus the four pipeline-context fields above when present.
+Emits `fabric.completed` with payload: `result`, `pattern`, `prompt`, `model`, `url`, `youtube_url`, `input_length`, `output_length`, plus `data` when `output_format` is `json`, `input_file` and `output_file` when given, and the pipeline-context fields above when present.
 
 ## Durable state
 
@@ -51,6 +60,31 @@ On successful `handle`, returns `state_updates` with:
 ```
 
 The manifest's `fact_outputs` rule snapshots this as `fabric.snapshot` (mirror_object). The `executions_count` is the rolling tally and is read back on the next invocation — without fact_outputs the counter would silently stay at 1 (the gateway discards state_updates when no rule matches).
+
+## Example: a local model through llama-swap, configured without a file
+
+```yaml
+plugins:
+  fabric_mail:
+    uses: fabric
+    enabled: true
+    timeout: 240s
+    max_attempts: 1
+    config:
+      FABRIC_BIN_PATH: /usr/local/bin/fabric
+      FABRIC_DEFAULT_MODEL: gemma-3-4b
+      FABRIC_RAW: true
+      FABRIC_TIMEOUT_SECONDS: 180
+      FABRIC_OUTPUT_FORMAT: json
+      FABRIC_HOME: /app/data/fabric-home
+      FABRIC_ENV:
+        DEFAULT_VENDOR: OpenAI
+        OPENAI_API_KEY: not-needed
+        OPENAI_API_BASE_URL: http://192.168.20.4:11440/v1
+        CUSTOM_PATTERNS_DIRECTORY: /app/data/fabric-patterns
+```
+
+`uses: fabric` makes `fabric_mail` a second instance of this plugin with its own config.
 
 ## Example
 
