@@ -1,0 +1,45 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: agentmail
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+concurrency_safe: false
+description: "Saves the messages that arrive in an AgentMail inbox into a local spool, one folder per message: message.json as AgentMail returns it (headers, bodies, authentication results), attachments/ byte-exact, and manifest.json with each attachment's size and sha256. A folder is built under a temporary name and renamed into place when complete. The folder is the plugin's memory, not plugin state, so retries and crashes neither skip nor duplicate a message. Nothing in the inbox is deleted or marked. Emits agentmail.message.saved per new folder; message content stays in the spool."
+commands:
+  - name: poll
+    type: write
+    description: "Save every message whose folder is not yet in the spool, at most max_messages a poll. Emits agentmail.message.saved per folder saved, carrying ids, counts and the folder name only; nothing when the inbox had nothing new."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume: []
+      emit:
+        - event: agentmail.message.saved
+          values:
+            - payload.inbox
+            - payload.message_id
+            - payload.folder
+            - payload.spool_dir
+            - payload.attachments
+            - payload.timestamp
+            - payload.saved_at
+  - name: health
+    type: read
+    description: "Report whether the spool is writable, how many messages it holds, and whether the inbox answers the key. Lists at most one message and reads none."
+    idempotent: true
+    retry_safe: true
+    values:
+      consume: []
+      emit:
+        - event: agentmail.health
+          values:
+            - payload.healthy
+            - payload.checked_at
+            - payload.spool
+            - payload.inbox
+config_keys:
+  # The API key is vault-native: grant the `agentmail_api_key` secret to this plugin;
+  # it arrives over stdin in `secrets`, never in config.
+  required: [inbox, spool_dir]
+  optional: [base_url, page_size, max_messages, request_timeout_seconds]

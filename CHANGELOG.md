@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-10-25
+- New plugin `agentmail` 0.1.0: saves the messages in an AgentMail inbox into a local spool, one folder per message (`message.json` as AgentMail returns it, `attachments/` byte-exact, `manifest.json` with sizes and sha256). Each folder is built under a temporary name and renamed into place when complete; the folder is the plugin's memory, so retries and crashes neither skip nor duplicate a message. API key from the vault as `agentmail_api_key`, never sent to the signed download link. Emits `agentmail.message.saved` with ids and counts only. Stdlib only, 21 tests against a fake inbox.
+
 ## 2026-10-12
 - New plugin `owntracks` 0.1.0: pulls OwnTracks points from an edge buffer (HTTP export of rows after a cursor, bearer token from the vault as `owntracks_pull_token`) into a local spool, `<spool_dir>/<device>/<YYYY-MM>.jsonl`, raw bodies kept byte-exact. The cursor is the highest id already in the spool, not plugin state, so retries and crashes neither skip nor duplicate rows, and a torn tail is repaired. Emits `location.new_data` with counts and ids only; positions never leave the spool. Stdlib only, 16 tests against a fake export.
 
