@@ -124,8 +124,8 @@ def handle_command(config, state, event, context):
         return error_response(f"Cannot write {out}: {exc.strerror or type(exc).__name__}", retry=True)
 
     empty = text.strip() == ""
-    # The payload as sent, then what this step adds. Paths are given as the caller named
-    # them for pdf, and as written for the text file.
+    # The payload as sent, then what this step adds. Both paths are real paths, resolved
+    # under root, so a later step compares like with like.
     event_payload = {k: v for k, v in payload.items() if k not in OWN_FIELDS}
     event_payload.update({"input_file": out, "pdf": pdf, "empty": empty})
     message = f"Extracted {os.path.basename(pdf)}" + (" (no text layer)" if empty else "")
