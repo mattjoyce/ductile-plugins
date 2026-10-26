@@ -3,15 +3,19 @@
 
 Protocol v2: reads JSON from stdin, writes JSON to stdout.
 
-handle: payload.pdf (or payload.input_file) names a PDF under config.root. pdftotext reads
-it and the text is written to <pdf>.txt, or to payload.output_file under the root, whole or
-not at all. pdf_text.completed carries input_file (the text path) and pdf (the PDF), plus
+handle: payload.pdf (or payload.input_file) names a PDF under one of config.root. pdftotext
+reads it and the text is written, whole or not at all, to payload.output_file, else to
+<output_dir>/<pdf name>.txt when output_dir is set (payload, then config), else to <pdf>.txt.
+Every path, read or written, must lie under one of the roots. pdf_text.completed carries input_file (the text path) and pdf (the PDF), plus
 every other payload field unchanged, so the next step sees what the first one was sent.
 A PDF with no text layer still emits, with empty true, so a later step can route it to OCR.
 
 Config:
-- root    : the one folder a PDF or output file may live under. Required to handle; without
-            it every path is refused, since a path in an event could point anywhere.
+- root    : a folder, or a list of folders, a PDF or output file may live under. Required to
+            handle; without it every path is refused, since a path in an event could point
+            anywhere. A relative path is taken against the first.
+- output_dir : where the text goes when the PDF's own folder is not writable, such as a
+            read-only share. Must lie under a root.
 - layout  : pass -layout (default true)
 - timeout : seconds one pdftotext run may take (default 60)
 """
@@ -25,23 +29,29 @@ from datetime import datetime, timezone
 
 DEFAULT_TIMEOUT = 60
 # What this plugin sets itself; a forwarded payload field never overrides them.
-OWN_FIELDS = ("input_file", "pdf", "empty", "output_file")
+OWN_FIELDS = ("input_file", "pdf", "empty", "output_file", "output_dir")
 
 
 def as_bool(value):
     return value is True or str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
-def confine(path, root):
-    """path resolved, and refused unless it lies under root. Symlinks are resolved first,
-    so a link cannot lead out of root."""
-    if not root:
+def roots_of(root):
+    """config.root as a list of real paths: one folder or several."""
+    named = root if isinstance(root, list) else [root] if root else []
+    return [os.path.realpath(str(r)) for r in named if r]
+
+
+def confine(path, roots, folder=False):
+    """path resolved, and refused unless it lies under one of roots; a folder may be a root
+    itself, a file may not. Symlinks are resolved first, so a link cannot lead out of a root."""
+    if not roots:
         raise ValueError("set root to name a file")
-    real_root = os.path.realpath(str(root))
-    real = os.path.realpath(os.path.join(real_root, str(path)))
-    if os.path.commonpath([real_root, real]) != real_root or real == real_root:
-        raise ValueError(f"{path} is outside root")
-    return real
+    real = os.path.realpath(os.path.join(roots[0], str(path)))
+    for real_root in roots:
+        if (folder or real != real_root) and os.path.commonpath([real_root, real]) == real_root:
+            return real
+    raise ValueError(f"{path} is outside root")
 
 
 def check_regular(path):
@@ -93,16 +103,22 @@ def handle_command(config, state, event, context):
     if timeout < 1:
         return error_response("Bad config: timeout must be at least 1")
     layout = as_bool(config.get("layout", True))
-    root = config.get("root")
+    roots = roots_of(config.get("root"))
 
     named = pick("pdf") or pick("input_file")
     if not named:
         return error_response("Missing input: provide 'pdf' (or 'input_file')")
     output_file = pick("output_file")
+    output_dir = pick("output_dir") or config.get("output_dir")
     try:
-        pdf = confine(named, root)
+        pdf = confine(named, roots)
         check_regular(pdf)
-        out = confine(output_file, root) if output_file else pdf + ".txt"
+        if output_file:
+            out = confine(output_file, roots)
+        elif output_dir:
+            out = os.path.join(confine(output_dir, roots, folder=True), os.path.basename(pdf) + ".txt")
+        else:
+            out = pdf + ".txt"
     except (ValueError, OSError) as exc:
         return error_response(f"Refused file path: {exc}")
 
@@ -152,10 +168,11 @@ def health_command(config):
         return error_response("pdftotext -v timed out")
     if done.returncode != 0:
         return error_response(f"pdftotext -v exited {done.returncode}")
-    root = config.get("root")
-    if not root or not os.path.isdir(str(root)):
-        return error_response("root is not set or is not a folder")
-    message = "pdftotext present, root exists"
+    roots = roots_of(config.get("root"))
+    missing = [r for r in roots if not os.path.isdir(r)]
+    if not roots or missing:
+        return error_response("root is not set or is not a folder: " + ", ".join(missing))
+    message = f"pdftotext present, {len(roots)} root(s) exist"
     return {"status": "ok", "result": message, "logs": [{"level": "info", "message": message}]}
 
 

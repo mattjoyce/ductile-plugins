@@ -98,6 +98,30 @@ class Extract(Base):
         self.assertEqual(out["events"][0]["payload"]["input_file"], str(self.root / "o" / "out.txt"))
         self.assertFalse((self.root / "in.pdf.txt").exists())
 
+    def test_read_only_source_writes_to_output_dir_under_a_second_root(self) -> None:
+        pdf = self.pdf("share/in.pdf")
+        work = self.dir / "work"
+        work.mkdir()
+        roots = [str(self.root), str(work)]
+        (self.root / "share").chmod(0o555)
+        try:
+            out = self.run_handle({"pdf": str(pdf)}, root=roots, output_dir=str(work))
+        finally:
+            (self.root / "share").chmod(0o755)
+        self.assertEqual(out["status"], "ok", out)
+        self.assertEqual(out["events"][0]["payload"]["input_file"], str(work / "in.pdf.txt"))
+        self.assertIn("Thank you", (work / "in.pdf.txt").read_text())
+        # the event's output_dir wins over config's
+        (work / "e").mkdir()
+        out = self.run_handle({"pdf": str(pdf), "output_dir": str(work / "e")}, root=roots, output_dir=str(work))
+        self.assertEqual(out["events"][0]["payload"]["input_file"], str(work / "e" / "in.pdf.txt"))
+        self.assertNotIn("output_dir", out["events"][0]["payload"])
+
+    def test_health_names_a_missing_root(self) -> None:
+        out = health_command({"root": [str(self.root), str(self.dir / "gone")]})
+        self.assertEqual(out["status"], "error")
+        self.assertIn("gone", out["error"])
+
     def test_layout_off_still_extracts(self) -> None:
         pdf = self.pdf("in.pdf")
         out = self.run_handle({"pdf": str(pdf)}, layout=False)
@@ -158,6 +182,13 @@ class Refusals(Base):
         out = self.run_handle({"pdf": str(pdf), "output_file": str(self.dir / "o.txt")})
         self.assertEqual(out["status"], "error")
         self.assertFalse((self.dir / "o.txt").exists())
+
+    def test_output_dir_outside_roots_refuses(self) -> None:
+        pdf = self.pdf("in.pdf")
+        out = self.run_handle({"pdf": str(pdf), "output_dir": str(self.dir)})
+        self.assertEqual(out["status"], "error")
+        self.assertIn("outside root", out["error"])
+        self.assertFalse((self.dir / "in.pdf.txt").exists())
 
     def test_not_regular_file_refuses(self) -> None:
         (self.root / "d.pdf").mkdir()

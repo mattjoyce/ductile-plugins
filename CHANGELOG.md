@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-10-27
+- New plugin `pdf_text` 0.1.0: a PDF to a text file with `pdftotext` (`-layout` by default), for any pipeline to chain. `payload.pdf` (or `input_file`) names a PDF under `config.root`, one folder or a list; the text goes beside it as `<pdf>.txt`, or to `<output_dir>/<pdf name>.txt` for a read-only source, or to `payload.output_file`, always under a root, atomically. Emits `pdf_text.completed` with `input_file` (the text), `pdf`, `empty` (no text layer, for a later OCR step) and every other payload field unchanged. Needs `poppler-utils` on the gateway's path. 21 tests over PDFs the tests build themselves. First user: Anam's mail pipeline (anam card 250).
+
 ## 2026-10-25
 - `fabric` 0.3.0, every addition opt-in and the default behaviour unchanged: `FABRIC_ENV` and `FABRIC_HOME` configure fabric without a settings file (an empty `~/.config/fabric/.env` is created in `FABRIC_HOME`, which is all fabric needs beside the environment); `FABRIC_RAW` passes `--raw` for OpenAI-compatible servers such as llama-swap; `FABRIC_TIMEOUT_SECONDS` replaces the fixed 120 s; `payload.input_file` reads the input from a regular file under `FABRIC_FILE_ROOT` (refused without that root, outside it, through a symlink out of it, or over `FABRIC_MAX_INPUT_BYTES`); `output_format: json` strips a code fence, requires one JSON value and emits it as `payload.data`; `payload.output_file` also writes the output atomically, under the same root; `folder` passes through. First tests: 21, against a stand-in binary. Run end to end against llama-swap gemma-3-4b on a real invoice.
 

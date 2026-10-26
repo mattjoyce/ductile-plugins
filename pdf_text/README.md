@@ -5,13 +5,14 @@ Turns a PDF into a text file beside it with `pdftotext`, so any pipeline can cha
 ## Commands
 
 - `handle` (write): extract one PDF and write the text.
-- `health` (read): `pdftotext -v` runs and `root` is a folder.
+- `health` (read): `pdftotext -v` runs and every `root` is a folder.
 
 ## Configuration
 
 | Key | Default | Purpose |
 |---|---|---|
-| `root` | none, required | The only folder a PDF or output file may live under. Unset, every path is refused |
+| `root` | none, required | A folder, or a list of folders, a PDF or output file may live under. Unset, every path is refused. A relative path is taken against the first |
+| `output_dir` | none | Write the text here as `<pdf name>.txt` instead of beside the PDF, for a source folder that is read-only. Must lie under a root |
 | `layout` | `true` | Pass `-layout`, which keeps columns and tables aligned. `false` gives reading order |
 | `timeout` | `60` | Seconds one `pdftotext` run may take |
 
@@ -19,8 +20,9 @@ Turns a PDF into a text file beside it with `pdftotext`, so any pipeline can cha
 
 | Field | Purpose |
 |---|---|
-| `pdf` (or `input_file`) | Path of the PDF, under `root`. Refused outside it, or when not a regular file |
-| `output_file` | Where to write the text, under `root`. Default `<pdf>.txt` |
+| `pdf` (or `input_file`) | Path of the PDF, under a root. Refused outside them, or when not a regular file |
+| `output_dir` | As the config key, for this one PDF; wins over the config |
+| `output_file` | Exact path for the text, under a root; wins over `output_dir`. Default `<pdf>.txt` |
 
 The text is written whole or not at all (temporary file, then rename).
 
