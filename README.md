@@ -18,6 +18,7 @@ Each directory is a self-contained plugin implementing the Ductile plugin protoc
 | `github_repo_sync` | Sync a GitHub repo |
 | `jina-reader` | Fetch clean article text via Jina Reader |
 | `owntracks` | Pull OwnTracks points from an edge buffer into a local spool |
+| `pdf_text` | Turn a PDF into a text file beside it with pdftotext |
 | `repo_policy` | Enforce policy rules on a git repository |
 | `youtube_playlist` | Fetch a YouTube playlist |
 | `youtube_transcript` | Fetch a YouTube video transcript |

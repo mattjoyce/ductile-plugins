@@ -1,0 +1,107 @@
+manifest_spec: ductile.plugin
+manifest_version: 1
+name: pdf_text
+version: 0.1.0
+protocol: 2
+entrypoint: run.py
+concurrency_safe: true
+description: "Turns a PDF into a text file beside it with pdftotext, so any pipeline can chain extraction. payload.pdf (or input_file) names a PDF under config.root; the text is written to <pdf>.txt (or payload.output_file under the root), atomically, and pdf_text.completed carries input_file = the text path, pdf = the PDF, empty = true when the PDF has no text layer, and every other payload field unchanged. Needs poppler-utils (pdftotext) on the gateway's path."
+commands:
+  - name: handle
+    type: write
+    description: "Extract one PDF. Refused when the PDF or output path is outside config.root or the PDF is not a regular file. A failing pdftotext is an error naming its exit code; a missing binary or a timeout is an error worth retrying. A PDF with no text still succeeds, with empty true, so a later step can send it to OCR."
+    idempotent: true
+    retry_safe: true
+    input_schema:
+      type: object
+      properties:
+        pdf:
+          type: string
+          description: "Path, under config.root, of the PDF. input_file is accepted in its place."
+        input_file:
+          type: string
+          description: "Alias for pdf, used when pdf is absent."
+        output_file:
+          type: string
+          description: "Path, under config.root, to write the text to instead of <pdf>.txt."
+      additionalProperties: true
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+        error:
+          type: string
+        retry:
+          type: boolean
+        events:
+          type: array
+          items:
+            type: object
+        state_updates:
+          type: object
+          properties:
+            last_run:
+              type: string
+            executions_count:
+              type: integer
+              minimum: 0
+            last_pdf:
+              type: string
+            last_empty:
+              type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
+    values:
+      consume:
+        - payload.pdf
+        - payload.input_file
+        - payload.output_file
+      emit:
+        - event: pdf_text.completed
+          values:
+            - payload.input_file
+            - payload.pdf
+            - payload.empty
+  - name: health
+    type: read
+    description: "pdftotext is on the path (pdftotext -v) and config.root is a folder."
+    idempotent: true
+    retry_safe: true
+    input_schema: {}
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        result:
+          type: string
+        error:
+          type: string
+        retry:
+          type: boolean
+        logs:
+          type: array
+          items:
+            type: object
+      required: [status, logs]
+      additionalProperties: false
+fact_outputs:
+  - when:
+      command: handle
+    from: state_updates
+    fact_type: pdf_text.snapshot
+    compatibility_view: mirror_object
+config_keys:
+  required: [root]
+  optional:
+    - layout
+    - timeout
